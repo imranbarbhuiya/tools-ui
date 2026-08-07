@@ -1,0 +1,6 @@
+.Build/
+.build/
+ToolsUI.app/
+Tools UI.app/
+*.xcodeproj
+.DS_Store
