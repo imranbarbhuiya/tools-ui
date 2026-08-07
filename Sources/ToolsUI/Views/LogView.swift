@@ -12,21 +12,26 @@ struct LogView: View {
 		NavigationStack {
 			ScrollView {
 				Text(log.isEmpty ? "No output yet." : log)
-					.font(.system(.body, design: .monospaced))
+					.font(.system(.callout, design: .monospaced))
+					.foregroundStyle(log.isEmpty ? .tertiary : .primary)
 					.frame(maxWidth: .infinity, alignment: .leading)
 					.textSelection(.enabled)
-					.padding()
+					.padding(16)
 			}
-			.navigationTitle(service.map { "\($0.name) log" } ?? "Log")
+			.background(Color.primary.opacity(0.03))
+			.navigationTitle(service.map { "\($0.name)" } ?? "Log")
+			.toolbarTitleDisplayMode(.inline)
 			.toolbar {
 				ToolbarItem(placement: .cancellationAction) {
-					Button("Close") { dismiss() }
+					Button("Done") { dismiss() }
+						.keyboardShortcut(.cancelAction)
 				}
 				ToolbarItem(placement: .automatic) {
 					Button("Clear") { store.clearLog(serviceId) }
+						.disabled(log.isEmpty)
 				}
 			}
 		}
-		.frame(minWidth: 560, minHeight: 360)
+		.frame(minWidth: 640, minHeight: 420)
 	}
 }

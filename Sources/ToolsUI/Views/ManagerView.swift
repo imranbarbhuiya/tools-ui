@@ -5,6 +5,7 @@ struct ManagerView: View {
 	@State private var selection: UUID?
 	@State private var editor: EditorMode?
 	@State private var showLogFor: UUID?
+	@State private var search = ""
 
 	enum EditorMode: Identifiable {
 		case add
@@ -18,74 +19,23 @@ struct ManagerView: View {
 		}
 	}
 
+	private var filtered: [ManagedService] {
+		let q = search.trimmingCharacters(in: .whitespacesAndNewlines)
+		guard !q.isEmpty else { return store.services }
+		return store.services.filter {
+			$0.name.localizedCaseInsensitiveContains(q)
+				|| $0.command.localizedCaseInsensitiveContains(q)
+				|| $0.workingDirectory.localizedCaseInsensitiveContains(q)
+		}
+	}
+
 	var body: some View {
 		NavigationSplitView {
-			VStack(spacing: 0) {
-				List(selection: $selection) {
-					ForEach(store.services) { service in
-						ServiceRowView(service: service, status: store.status(for: service.id))
-							.tag(service.id)
-							.contextMenu {
-								serviceMenu(service)
-							}
-					}
-					.onMove(perform: store.move)
-				}
-				.listStyle(.sidebar)
-				Divider()
-				Button {
-					editor = .add
-				} label: {
-					Label("Add Service", systemImage: "plus.circle.fill")
-						.frame(maxWidth: .infinity, alignment: .leading)
-				}
-				.buttonStyle(.borderless)
-				.padding(.horizontal, 12)
-				.padding(.vertical, 10)
-			}
-			.navigationTitle("Services")
-			.toolbar {
-				ToolbarItemGroup {
-					Button {
-						editor = .add
-					} label: {
-						Label("Add", systemImage: "plus")
-					}
-					.help("Add Service")
-					Button {
-						store.stopAll()
-					} label: {
-						Label("Stop All", systemImage: "stop.circle")
-					}
-					.disabled(!store.anyRunning)
-				}
-			}
+			sidebar
 		} detail: {
-			if let selection, let service = store.services.first(where: { $0.id == selection }) {
-				ServiceDetailView(
-					service: service,
-					status: store.status(for: service.id),
-					onStart: { store.start(service.id) },
-					onStop: { store.stop(service.id) },
-					onRestart: { store.restart(service.id) },
-					onOpenURL: { store.openURL(service.id) },
-					onOpenFolder: { store.openFolder(service.id) },
-					onEdit: { editor = .edit(service) },
-					onDelete: {
-						store.delete(service.id)
-						self.selection = nil
-					},
-					onShowLog: { showLogFor = service.id },
-					onClearLog: { store.clearLog(service.id) }
-				)
-			} else {
-				ContentUnavailableView(
-					"Select a service",
-					systemImage: "bolt.horizontal.circle",
-					description: Text("Add local apps and toggle them from here or the menu bar.")
-				)
-			}
+			detail
 		}
+		.navigationSplitViewStyle(.balanced)
 		.sheet(item: $editor) { mode in
 			switch mode {
 			case .add:
@@ -107,29 +57,172 @@ struct ManagerView: View {
 		}
 		.overlay(alignment: .bottom) {
 			if let err = store.lastError {
-				Text(err)
-					.font(.caption)
-					.padding(.horizontal, 12)
-					.padding(.vertical, 8)
-					.background(.red.opacity(0.15), in: Capsule())
-					.padding()
-					.onTapGesture { store.lastError = nil }
+				errorToast(err)
 			}
 		}
+	}
+
+	private var sidebar: some View {
+		VStack(spacing: 0) {
+			List(selection: $selection) {
+				Section {
+					if filtered.isEmpty {
+						ContentUnavailableView {
+							Label(
+								store.services.isEmpty ? "No services" : "No matches",
+								systemImage: store.services.isEmpty ? "shippingbox" : "magnifyingglass"
+							)
+						} description: {
+							Text(store.services.isEmpty
+								? "Add a local command to start, stop, and open it from the menu bar."
+								: "Try another search.")
+						}
+						.frame(maxWidth: .infinity)
+						.padding(.vertical, 24)
+						.listRowBackground(Color.clear)
+						.listRowSeparator(.hidden)
+					} else {
+						ForEach(filtered) { service in
+							ServiceRowView(service: service, status: store.status(for: service.id))
+								.tag(service.id)
+								.contextMenu { serviceMenu(service) }
+						}
+						.onMove(perform: store.move)
+					}
+				} header: {
+					HStack {
+						Text("Services")
+						Spacer()
+						Text("\(store.statuses.values.filter(\.isRunning).count) running")
+							.font(.caption2.weight(.medium))
+							.foregroundStyle(.tertiary)
+					}
+				}
+			}
+			.listStyle(.sidebar)
+			.searchable(text: $search, placement: .sidebar, prompt: "Filter")
+
+			sidebarFooter
+		}
+		.navigationSplitViewColumnWidth(min: Theme.sidebarMin, ideal: Theme.sidebarIdeal, max: 320)
+		.toolbar {
+			ToolbarItemGroup(placement: .primaryAction) {
+				Button {
+					editor = .add
+				} label: {
+					Label("Add", systemImage: "plus")
+				}
+				.help("Add Service")
+				.keyboardShortcut("n", modifiers: [.command])
+
+				Button {
+					store.stopAll()
+				} label: {
+					Label("Stop All", systemImage: "stop.fill")
+				}
+				.disabled(!store.anyRunning)
+				.help("Stop all running services")
+			}
+		}
+	}
+
+	private var sidebarFooter: some View {
+		VStack(spacing: 0) {
+			Divider()
+			Button {
+				editor = .add
+			} label: {
+				Label("Add Service", systemImage: "plus")
+					.font(.body.weight(.medium))
+					.frame(maxWidth: .infinity)
+					.padding(.vertical, 9)
+			}
+			.buttonStyle(.bordered)
+			.controlSize(.regular)
+			.padding(.horizontal, 12)
+			.padding(.vertical, 10)
+			.background(.bar)
+		}
+	}
+
+	@ViewBuilder
+	private var detail: some View {
+		if let selection, let service = store.services.first(where: { $0.id == selection }) {
+			ServiceDetailView(
+				service: service,
+				status: store.status(for: service.id),
+				onStart: { store.start(service.id) },
+				onStop: { store.stop(service.id) },
+				onRestart: { store.restart(service.id) },
+				onOpenURL: { store.openURL(service.id) },
+				onOpenFolder: { store.openFolder(service.id) },
+				onEdit: { editor = .edit(service) },
+				onDelete: {
+					store.delete(service.id)
+					self.selection = nil
+				},
+				onShowLog: { showLogFor = service.id },
+				onClearLog: { store.clearLog(service.id) }
+			)
+			.id(service.id)
+			.transition(.opacity.combined(with: .move(edge: .trailing)))
+		} else {
+			ContentUnavailableView {
+				VStack(spacing: 14) {
+					AppLogoView(size: 84)
+					Text("Tools UI")
+						.font(.system(.title, design: .rounded).weight(.semibold))
+				}
+			} description: {
+				Text("Select a service, or add one to manage local processes like a dock for CLIs.")
+			} actions: {
+				Button("Add Service") { editor = .add }
+					.buttonStyle(.borderedProminent)
+			}
+			.frame(maxWidth: .infinity, maxHeight: .infinity)
+			.background()
+		}
+	}
+
+	private func errorToast(_ err: String) -> some View {
+		HStack(spacing: 10) {
+			Image(systemName: "exclamationmark.triangle.fill")
+				.foregroundStyle(.orange)
+			Text(err)
+				.font(.callout)
+				.lineLimit(2)
+			Spacer(minLength: 8)
+			Button {
+				store.lastError = nil
+			} label: {
+				Image(systemName: "xmark.circle.fill")
+					.symbolRenderingMode(.hierarchical)
+					.foregroundStyle(.secondary)
+			}
+			.buttonStyle(.plain)
+		}
+		.padding(.horizontal, 14)
+		.padding(.vertical, 10)
+		.background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+		.shadow(color: .black.opacity(0.18), radius: 16, y: 6)
+		.padding(16)
+		.transition(.move(edge: .bottom).combined(with: .opacity))
 	}
 
 	@ViewBuilder
 	private func serviceMenu(_ service: ManagedService) -> some View {
 		let status = store.status(for: service.id)
 		if status.isRunning {
-			Button("Stop") { store.stop(service.id) }
-			Button("Restart") { store.restart(service.id) }
+			Button("Stop", systemImage: "stop.fill") { store.stop(service.id) }
+			Button("Restart", systemImage: "arrow.clockwise") { store.restart(service.id) }
 		} else {
-			Button("Start") { store.start(service.id) }
+			Button("Start", systemImage: "play.fill") { store.start(service.id) }
 		}
-		Button("Edit") { editor = .edit(service) }
-		Button("Show Log") { showLogFor = service.id }
-		Button("Delete", role: .destructive) {
+		Divider()
+		Button("Edit", systemImage: "pencil") { editor = .edit(service) }
+		Button("Show Log", systemImage: "text.alignleft") { showLogFor = service.id }
+		Divider()
+		Button("Delete", systemImage: "trash", role: .destructive) {
 			store.delete(service.id)
 			if selection == service.id { selection = nil }
 		}
@@ -145,30 +238,31 @@ struct ServiceRowView: View {
 	let status: ServiceStatus
 
 	var body: some View {
-		HStack(spacing: 10) {
-			Circle()
-				.fill(dotColor)
-				.frame(width: 8, height: 8)
+		HStack(spacing: 12) {
+			ServiceAvatar(name: service.name, isRunning: status.isRunning, size: 32)
 			VStack(alignment: .leading, spacing: 2) {
 				Text(service.name)
 					.font(.body.weight(.medium))
+					.lineLimit(1)
 				Text(status.label)
 					.font(.caption)
-					.foregroundStyle(.secondary)
+					.foregroundStyle(status.state.tint.opacity(0.9))
 					.lineLimit(1)
 			}
 			Spacer(minLength: 0)
+			Circle()
+				.fill(status.state.tint)
+				.frame(width: 7, height: 7)
+				.opacity({
+					switch status.state {
+					case .running, .starting, .failed: 1
+					case .stopped: 0.35
+					}
+				}())
 		}
-		.padding(.vertical, 2)
-	}
-
-	private var dotColor: Color {
-		switch status.state {
-		case .running: .green
-		case .starting: .yellow
-		case .failed: .red
-		case .stopped: .secondary
-		}
+		.padding(.vertical, 4)
+		.accessibilityElement(children: .combine)
+		.accessibilityLabel("\(service.name), \(status.label)")
 	}
 }
 
@@ -187,97 +281,171 @@ struct ServiceDetailView: View {
 
 	var body: some View {
 		ScrollView {
-			VStack(alignment: .leading, spacing: 20) {
-				HStack(alignment: .firstTextBaseline) {
-					VStack(alignment: .leading, spacing: 6) {
-						Text(service.name)
-							.font(.largeTitle.weight(.semibold))
-						Text(status.label)
-							.foregroundStyle(.secondary)
+			VStack(alignment: .leading, spacing: 22) {
+				header
+				actionBar
+				detailsCard
+				logCard
+			}
+			.frame(maxWidth: Theme.contentMax, alignment: .leading)
+			.frame(maxWidth: .infinity, alignment: .leading)
+			.padding(28)
+		}
+		.background()
+		.toolbar {
+			ToolbarItemGroup(placement: .primaryAction) {
+				if status.isRunning {
+					Button(action: onRestart) {
+						Label("Restart", systemImage: "arrow.clockwise")
 					}
-					Spacer()
-					statusBadge
-				}
-
-				HStack(spacing: 10) {
-					if status.isRunning {
-						Button("Stop", role: .destructive, action: onStop)
-							.buttonStyle(.borderedProminent)
-							.tint(.red)
-						Button("Restart", action: onRestart)
-							.buttonStyle(.bordered)
-					} else {
-						Button("Start", action: onStart)
-							.buttonStyle(.borderedProminent)
+					Button(role: .destructive, action: onStop) {
+						Label("Stop", systemImage: "stop.fill")
 					}
-					if !service.url.isEmpty {
-						Button("Open URL", action: onOpenURL)
-							.buttonStyle(.bordered)
+				} else {
+					Button(action: onStart) {
+						Label("Start", systemImage: "play.fill")
 					}
-					if !service.workingDirectory.isEmpty {
-						Button("Folder", action: onOpenFolder)
-							.buttonStyle(.bordered)
-					}
-					Button("Log", action: onShowLog)
-						.buttonStyle(.bordered)
-					Spacer()
-					Button("Edit", action: onEdit)
-					Button("Delete", role: .destructive, action: onDelete)
-				}
-
-				GroupBox("Command") {
-					VStack(alignment: .leading, spacing: 8) {
-						labeled("Working dir", service.workingDirectory.isEmpty ? "—" : service.workingDirectory)
-						labeled("Command", service.command)
-						labeled("URL", service.url.isEmpty ? "—" : service.url)
-						labeled("PID", status.pidText)
-						labeled("Auto-start", service.autoStart ? "Yes" : "No")
-						if !service.notes.isEmpty {
-							labeled("Notes", service.notes)
-						}
-					}
-					.frame(maxWidth: .infinity, alignment: .leading)
-					.padding(4)
-				}
-
-				GroupBox("Live log") {
-					ScrollView {
-						Text(status.log.isEmpty ? "No output yet." : status.log)
-							.font(.system(.caption, design: .monospaced))
-							.frame(maxWidth: .infinity, alignment: .leading)
-							.textSelection(.enabled)
-					}
-					.frame(minHeight: 160, maxHeight: 280)
-					.padding(4)
-					HStack {
-						Spacer()
-						Button("Clear", action: onClearLog)
-							.controlSize(.small)
-					}
+					.keyboardShortcut(.return, modifiers: [.command])
 				}
 			}
-			.padding(24)
+			ToolbarItem(placement: .automatic) {
+				Menu {
+					if !service.url.isEmpty {
+						Button("Open URL", systemImage: "safari") { onOpenURL() }
+					}
+					if !service.workingDirectory.isEmpty {
+						Button("Reveal in Finder", systemImage: "folder") { onOpenFolder() }
+					}
+					Button("Full Log…", systemImage: "doc.plaintext") { onShowLog() }
+					Divider()
+					Button("Edit…", systemImage: "pencil") { onEdit() }
+					Button("Delete…", systemImage: "trash", role: .destructive) { onDelete() }
+				} label: {
+					Label("More", systemImage: "ellipsis.circle")
+				}
+			}
 		}
-		.background(Color(nsColor: .windowBackgroundColor))
 	}
 
-	private var statusBadge: some View {
-		Text(status.isRunning ? "ON" : "OFF")
-			.font(.caption.weight(.bold))
-			.padding(.horizontal, 10)
-			.padding(.vertical, 4)
-			.background(status.isRunning ? Color.green.opacity(0.2) : Color.secondary.opacity(0.15), in: Capsule())
-	}
-
-	private func labeled(_ title: String, _ value: String) -> some View {
-		HStack(alignment: .top) {
-			Text(title)
-				.foregroundStyle(.secondary)
-				.frame(width: 100, alignment: .leading)
-			Text(value)
-				.font(.body.monospaced())
-				.textSelection(.enabled)
+	private var header: some View {
+		HStack(alignment: .center, spacing: 16) {
+			ServiceAvatar(name: service.name, isRunning: status.isRunning, size: 56)
+			VStack(alignment: .leading, spacing: 6) {
+				Text(service.name)
+					.font(.system(.largeTitle, design: .rounded).weight(.semibold))
+				HStack(spacing: 8) {
+					StatusChip(state: status.state)
+					if case let .running(pid) = status.state {
+						Text("PID \(pid)")
+							.font(.caption.monospaced())
+							.foregroundStyle(.tertiary)
+					}
+					if let started = status.startedAt, status.isRunning {
+						Text("\(started, style: .relative) ago")
+							.font(.caption)
+							.foregroundStyle(.tertiary)
+					}
+				}
+				if !service.notes.isEmpty {
+					Text(service.notes)
+						.font(.subheadline)
+						.foregroundStyle(.secondary)
+						.lineLimit(2)
+				}
+			}
 			Spacer(minLength: 0)
+		}
+	}
+
+	private var actionBar: some View {
+		HStack(spacing: 10) {
+			if status.isRunning {
+				Button(action: onStop) {
+					Label("Stop", systemImage: "stop.fill")
+						.frame(minWidth: 88)
+				}
+				.buttonStyle(.borderedProminent)
+				.tint(.red)
+				.controlSize(.large)
+
+				Button(action: onRestart) {
+					Label("Restart", systemImage: "arrow.clockwise")
+				}
+				.buttonStyle(.bordered)
+				.controlSize(.large)
+			} else {
+				Button(action: onStart) {
+					Label("Start", systemImage: "play.fill")
+						.frame(minWidth: 88)
+				}
+				.buttonStyle(.borderedProminent)
+				.controlSize(.large)
+			}
+
+			if !service.url.isEmpty {
+				Button(action: onOpenURL) {
+					Label("Open", systemImage: "safari")
+				}
+				.buttonStyle(.bordered)
+				.controlSize(.large)
+			}
+
+			if !service.workingDirectory.isEmpty {
+				Button(action: onOpenFolder) {
+					Label("Folder", systemImage: "folder")
+				}
+				.buttonStyle(.bordered)
+				.controlSize(.large)
+			}
+
+			Spacer(minLength: 0)
+		}
+	}
+
+	private var detailsCard: some View {
+		InsetCard(title: "Configuration") {
+			VStack(spacing: 0) {
+				MetaRow(title: "Command", value: service.command, mono: true)
+				Divider().padding(.leading, 108)
+				MetaRow(
+					title: "Directory",
+					value: service.workingDirectory.isEmpty ? "—" : service.workingDirectory,
+					mono: true
+				)
+				Divider().padding(.leading, 108)
+				MetaRow(title: "URL", value: service.url.isEmpty ? "—" : service.url, mono: true)
+				Divider().padding(.leading, 108)
+				MetaRow(title: "Auto-start", value: service.autoStart ? "On launch" : "Manual")
+			}
+		}
+	}
+
+	private var logCard: some View {
+		InsetCard(title: "Output") {
+			VStack(alignment: .leading, spacing: 10) {
+				ScrollView {
+					Text(status.log.isEmpty ? "No output yet. Start the service to stream logs here." : status.log)
+						.font(.system(.caption, design: .monospaced))
+						.foregroundStyle(status.log.isEmpty ? .tertiary : .primary)
+						.frame(maxWidth: .infinity, alignment: .leading)
+						.textSelection(.enabled)
+				}
+				.frame(minHeight: 180, maxHeight: 300)
+				.padding(10)
+				.background {
+					RoundedRectangle(cornerRadius: 8, style: .continuous)
+						.fill(Color.primary.opacity(0.04))
+				}
+
+				HStack {
+					Button("Full log", systemImage: "arrow.up.left.and.arrow.down.right", action: onShowLog)
+						.controlSize(.small)
+					Spacer()
+					Button("Clear", systemImage: "trash", action: onClearLog)
+						.controlSize(.small)
+						.disabled(status.log.isEmpty)
+				}
+			}
 		}
 	}
 }

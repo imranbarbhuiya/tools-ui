@@ -4,3 +4,4 @@ ToolsUI.app/
 Tools UI.app/
 *.xcodeproj
 .DS_Store
+Resources/AppIcon.iconset/

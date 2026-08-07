@@ -12,41 +12,43 @@ struct MenuBarView: View {
 		} else {
 			ForEach(store.services) { service in
 				let status = store.status(for: service.id)
-				let mark = status.isRunning ? "●" : "○"
-				Menu("\(mark)  \(service.name)") {
+				Menu {
 					if status.isRunning {
-						Button("Stop") { store.stop(service.id) }
-						Button("Restart") { store.restart(service.id) }
+						Button("Stop", systemImage: "stop.fill") { store.stop(service.id) }
+						Button("Restart", systemImage: "arrow.clockwise") { store.restart(service.id) }
 					} else {
-						Button("Start") { store.start(service.id) }
+						Button("Start", systemImage: "play.fill") { store.start(service.id) }
 					}
 					if !service.url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-						Button("Open URL") { store.openURL(service.id) }
+						Button("Open URL", systemImage: "safari") { store.openURL(service.id) }
 					}
 					if !service.workingDirectory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-						Button("Open Folder") { store.openFolder(service.id) }
+						Button("Open Folder", systemImage: "folder") { store.openFolder(service.id) }
 					}
 					Divider()
 					Text(status.label)
+				} label: {
+					Text("\(status.isRunning ? "●" : "○")  \(service.name)")
 				}
 			}
 		}
 
 		Divider()
 
-		Button("Open Manager…") {
+		Button("Open Manager…", systemImage: "rectangle.split.2x1") {
 			openManager()
 		}
+		.keyboardShortcut("m", modifiers: [.command])
 
 		if store.anyRunning {
-			Button("Stop All", role: .destructive) {
+			Button("Stop All", systemImage: "stop.circle", role: .destructive) {
 				store.stopAll()
 			}
 		}
 
 		Divider()
 
-		Button("Quit Tools UI") {
+		Button("Quit Tools UI", systemImage: "power") {
 			store.stopAll()
 			NSApp.terminate(nil)
 		}

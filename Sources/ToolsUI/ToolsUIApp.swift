@@ -24,10 +24,11 @@ struct ToolsUIApp: App {
 
 		Window("Tools UI", id: "manager") {
 			ManagerView(store: store)
-				.frame(minWidth: 720, minHeight: 420)
+				.frame(minWidth: 800, minHeight: 520)
 				.background(OpenManagerListener())
 		}
-		.defaultSize(width: 820, height: 520)
+		.defaultSize(width: 920, height: 600)
+		.windowResizability(.contentMinSize)
 		.commands {
 			CommandGroup(replacing: .newItem) {}
 		}

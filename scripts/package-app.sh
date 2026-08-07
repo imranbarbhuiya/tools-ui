@@ -8,6 +8,12 @@ swift build -c release --disable-sandbox
 APP_NAME="Tools UI.app"
 APP="$ROOT/$APP_NAME"
 BIN="$ROOT/.build/release/ToolsUI"
+ICON_ICNS="$ROOT/Resources/AppIcon.icns"
+ICON_PNG="$ROOT/Resources/AppIcon-256.png"
+if [[ ! -f "$ICON_PNG" && -f "$ROOT/Resources/AppIcon.iconset/icon_256x256.png" ]]; then
+	ICON_PNG="$ROOT/Resources/AppIcon.iconset/icon_256x256.png"
+fi
+
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
@@ -39,7 +45,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>CFBundleIconFile</key>
-	<string></string>
+	<string>AppIcon</string>
 </dict>
 </plist>
 PLIST
@@ -47,18 +53,22 @@ PLIST
 cp "$BIN" "$APP/Contents/MacOS/ToolsUI"
 chmod +x "$APP/Contents/MacOS/ToolsUI"
 
-# Drop stale app names so you don't open two different copies by mistake
+if [[ -f "$ICON_ICNS" ]]; then
+	cp "$ICON_ICNS" "$APP/Contents/Resources/AppIcon.icns"
+fi
+if [[ -f "$ICON_PNG" ]]; then
+	cp "$ICON_PNG" "$APP/Contents/Resources/AppIcon-256.png"
+fi
+
 rm -rf "$ROOT/ToolsUI.app" 2>/dev/null || true
 
 INSTALL_DIR="${HOME}/Applications"
 mkdir -p "$INSTALL_DIR" 2>/dev/null || true
 rm -rf "$INSTALL_DIR/ToolsUI.app" 2>/dev/null || true
 if rm -rf "$INSTALL_DIR/$APP_NAME" 2>/dev/null; cp -R "$APP" "$INSTALL_DIR/$APP_NAME" 2>/dev/null; then
-	# touch so Spotlight / Raycast reindex
 	/usr/bin/touch "$INSTALL_DIR/$APP_NAME" 2>/dev/null || true
 	echo "Installed: $INSTALL_DIR/$APP_NAME"
 	echo "Raycast: type “Tools UI” (or run: open -a \"Tools UI\")"
-	echo "If missing in Raycast: Extensions → Applications → refresh / enable Applications"
 else
 	echo "Built: $APP"
 	echo "Install for Raycast (run in Terminal):"
