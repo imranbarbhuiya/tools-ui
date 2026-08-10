@@ -8,6 +8,7 @@ final class ServiceStore {
 	var services: [ManagedService] = []
 	var statuses: [UUID: ServiceStatus] = [:]
 	var lastError: String?
+	var portlessHealth: Portless.Health?
 
 	private let runners = ProcessManager()
 	private let saveURL: URL
@@ -32,6 +33,14 @@ final class ServiceStore {
 
 	var anyRunning: Bool {
 		statuses.values.contains { $0.isRunning }
+	}
+
+	var anyUsesPortless: Bool {
+		services.contains { $0.usesPortless }
+	}
+
+	func refreshPortlessHealth() async {
+		portlessHealth = await Portless.health()
 	}
 
 	func status(for id: UUID) -> ServiceStatus {
@@ -77,6 +86,16 @@ final class ServiceStore {
 				self?.handle(event, for: id)
 			}
 		}
+
+		if service.usesPortless {
+			Task { [weak self] in
+				let health = await Portless.health()
+				self?.portlessHealth = health
+				if let hint = health.hint {
+					self?.lastError = "\(service.name): \(hint)"
+				}
+			}
+		}
 	}
 
 	func stop(_ id: UUID) {
@@ -96,7 +115,7 @@ final class ServiceStore {
 
 	func openURL(_ id: UUID) {
 		guard let service = services.first(where: { $0.id == id }) else { return }
-		let trimmed = service.url.trimmingCharacters(in: .whitespacesAndNewlines)
+		let trimmed = service.effectiveURL
 		guard !trimmed.isEmpty, let url = URL(string: trimmed) else { return }
 		NSWorkspace.shared.open(url)
 	}

@@ -8,6 +8,8 @@ struct ManagedService: Identifiable, Codable, Equatable, Hashable {
 	var url: String
 	var autoStart: Bool
 	var notes: String
+	var portlessEnabled: Bool
+	var portlessName: String
 
 	init(
 		id: UUID = UUID(),
@@ -16,7 +18,9 @@ struct ManagedService: Identifiable, Codable, Equatable, Hashable {
 		command: String,
 		url: String = "",
 		autoStart: Bool = false,
-		notes: String = ""
+		notes: String = "",
+		portlessEnabled: Bool = false,
+		portlessName: String = ""
 	) {
 		self.id = id
 		self.name = name
@@ -25,6 +29,46 @@ struct ManagedService: Identifiable, Codable, Equatable, Hashable {
 		self.url = url
 		self.autoStart = autoStart
 		self.notes = notes
+		self.portlessEnabled = portlessEnabled
+		self.portlessName = portlessName
+	}
+
+	init(from decoder: any Decoder) throws {
+		let container = try decoder.container(keyedBy: CodingKeys.self)
+		id = try container.decode(UUID.self, forKey: .id)
+		name = try container.decode(String.self, forKey: .name)
+		command = try container.decode(String.self, forKey: .command)
+		workingDirectory = try container.decodeIfPresent(String.self, forKey: .workingDirectory) ?? ""
+		url = try container.decodeIfPresent(String.self, forKey: .url) ?? ""
+		autoStart = try container.decodeIfPresent(Bool.self, forKey: .autoStart) ?? false
+		notes = try container.decodeIfPresent(String.self, forKey: .notes) ?? ""
+		portlessEnabled = try container.decodeIfPresent(Bool.self, forKey: .portlessEnabled) ?? false
+		portlessName = try container.decodeIfPresent(String.self, forKey: .portlessName) ?? ""
+	}
+
+	var resolvedPortlessName: String {
+		let typed = portlessName.trimmingCharacters(in: .whitespacesAndNewlines)
+		return Portless.slug(from: typed.isEmpty ? name : typed)
+	}
+
+	var usesPortless: Bool {
+		portlessEnabled && !resolvedPortlessName.isEmpty
+	}
+
+	var portlessURL: String {
+		Portless.url(name: resolvedPortlessName)
+	}
+
+	/// The URL to open: derived from the portless hostname when routing is on,
+	/// otherwise whatever was typed by hand.
+	var effectiveURL: String {
+		usesPortless ? portlessURL : url.trimmingCharacters(in: .whitespacesAndNewlines)
+	}
+
+	var launchCommand: String {
+		let base = command.trimmingCharacters(in: .whitespacesAndNewlines)
+		guard usesPortless else { return base }
+		return Portless.wrap(command: base, name: resolvedPortlessName)
 	}
 }
 

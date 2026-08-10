@@ -19,7 +19,7 @@ struct MenuBarView: View {
 					} else {
 						Button("Start", systemImage: "play.fill") { store.start(service.id) }
 					}
-					if !service.url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+					if !service.effectiveURL.isEmpty {
 						Button("Open URL", systemImage: "safari") { store.openURL(service.id) }
 					}
 					if !service.workingDirectory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {

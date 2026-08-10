@@ -310,7 +310,7 @@ struct ServiceDetailView: View {
 			}
 			ToolbarItem(placement: .automatic) {
 				Menu {
-					if !service.url.isEmpty {
+					if !service.effectiveURL.isEmpty {
 						Button("Open URL", systemImage: "safari") { onOpenURL() }
 					}
 					if !service.workingDirectory.isEmpty {
@@ -382,7 +382,7 @@ struct ServiceDetailView: View {
 				.controlSize(.large)
 			}
 
-			if !service.url.isEmpty {
+			if !service.effectiveURL.isEmpty {
 				Button(action: onOpenURL) {
 					Label("Open", systemImage: "safari")
 				}
@@ -413,7 +413,13 @@ struct ServiceDetailView: View {
 					mono: true
 				)
 				Divider().padding(.leading, 108)
-				MetaRow(title: "URL", value: service.url.isEmpty ? "—" : service.url, mono: true)
+				MetaRow(title: "URL", value: service.effectiveURL.isEmpty ? "—" : service.effectiveURL, mono: true)
+				Divider().padding(.leading, 108)
+				MetaRow(
+					title: "Portless",
+					value: service.usesPortless ? service.resolvedPortlessName : "Off",
+					mono: service.usesPortless
+				)
 				Divider().padding(.leading, 108)
 				MetaRow(title: "Auto-start", value: service.autoStart ? "On launch" : "Manual")
 			}

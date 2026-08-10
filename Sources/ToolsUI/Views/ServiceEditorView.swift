@@ -34,12 +34,45 @@ struct ServiceEditorView: View {
 					}
 					TextField("Command", text: $draft.command, prompt: Text("bun run start"))
 						.font(.body.monospaced())
-					TextField("URL", text: $draft.url, prompt: Text("http://localhost:3456"))
-						.font(.body.monospaced())
+					if !draft.portlessEnabled {
+						TextField("URL", text: $draft.url, prompt: Text("http://localhost:3456"))
+							.font(.body.monospaced())
+					}
 				} header: {
 					Text("Service")
 				} footer: {
 					Text("Commands run in zsh with your login PATH, so tools like bun and node resolve normally.")
+				}
+
+				Section {
+					Toggle("Route through portless", isOn: $draft.portlessEnabled)
+					if draft.portlessEnabled {
+						TextField(
+							"Hostname",
+							text: $draft.portlessName,
+							prompt: Text(Portless.slug(from: draft.name).isEmpty ? "myapp" : Portless.slug(from: draft.name))
+						)
+						.font(.body.monospaced())
+						LabeledContent("Opens") {
+							Text(draft.resolvedPortlessName.isEmpty ? "—" : draft.portlessURL)
+								.font(.caption.monospaced())
+								.foregroundStyle(.secondary)
+								.textSelection(.enabled)
+						}
+						LabeledContent("Runs") {
+							Text(draft.launchCommand)
+								.font(.caption.monospaced())
+								.foregroundStyle(.secondary)
+								.lineLimit(2)
+								.textSelection(.enabled)
+						}
+					}
+				} header: {
+					Text("Portless")
+				} footer: {
+					Text(draft.portlessEnabled
+						? "Portless assigns the port and serves the app at the hostname above. Nothing is written to the project — no portless.json, no package.json change. Needs portless on your PATH and a running proxy (see Settings)."
+						: "Swap the port number for a stable https:// hostname without touching the project's files.")
 				}
 
 				Section("Options") {
@@ -73,6 +106,7 @@ struct ServiceEditorView: View {
 		s.workingDirectory = s.workingDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
 		s.url = s.url.trimmingCharacters(in: .whitespacesAndNewlines)
 		s.notes = s.notes.trimmingCharacters(in: .whitespacesAndNewlines)
+		s.portlessName = s.portlessName.trimmingCharacters(in: .whitespacesAndNewlines)
 		guard !s.name.isEmpty, !s.command.isEmpty else { return }
 		onSave(s)
 		dismiss()

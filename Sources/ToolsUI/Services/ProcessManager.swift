@@ -11,10 +11,12 @@ final class ProcessManager: @unchecked Sendable {
 	private final class Running: @unchecked Sendable {
 		let process: Process
 		let id: UUID
+		let killGrace: TimeInterval
 
-		init(id: UUID, process: Process) {
+		init(id: UUID, process: Process, killGrace: TimeInterval) {
 			self.id = id
 			self.process = process
+			self.killGrace = killGrace
 		}
 	}
 
@@ -31,7 +33,7 @@ final class ProcessManager: @unchecked Sendable {
 		process.standardError = stderr
 		process.standardInput = FileHandle.nullDevice
 		process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-		process.arguments = ["-lc", "exec \(service.command)"]
+		process.arguments = ["-lc", "exec \(service.launchCommand)"]
 
 		var env = ProcessInfo.processInfo.environment
 		env["TERM"] = "dumb"
@@ -67,7 +69,13 @@ final class ProcessManager: @unchecked Sendable {
 
 		do {
 			try process.run()
-			let item = Running(id: service.id, process: process)
+			// Under portless the real dev server is a grandchild, so give the
+			// wrapper time to forward SIGTERM and release its route.
+			let item = Running(
+				id: service.id,
+				process: process,
+				killGrace: service.usesPortless ? 4.0 : 1.2
+			)
 			lock.lock()
 			running[service.id] = item
 			lock.unlock()
@@ -88,7 +96,7 @@ final class ProcessManager: @unchecked Sendable {
 		let pid = process.processIdentifier
 		if process.isRunning {
 			process.terminate()
-			DispatchQueue.global().asyncAfter(deadline: .now() + 1.2) {
+			DispatchQueue.global().asyncAfter(deadline: .now() + item.killGrace) {
 				if process.isRunning {
 					kill(pid, SIGKILL)
 				}
