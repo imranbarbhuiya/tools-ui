@@ -3,12 +3,12 @@ import Foundation
 
 enum Portless {
 	static let defaultTLD = "localhost"
-	static let proxyPort: UInt16 = 443
 	static let installCommand = "npm install -g portless"
 	static let trustCommand = "portless trust"
 	static let serviceInstallCommand = "portless service install"
 	static let doctorCommand = "portless doctor"
 	static let pruneCommand = "portless prune"
+	static let proxyStartCommand = "portless proxy start"
 
 	static var stateDirectory: URL {
 		FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".portless", isDirectory: true)
@@ -35,109 +35,132 @@ enum Portless {
 		return out
 	}
 
-	static func url(name: String, tld: String = defaultTLD) -> String {
-		"https://\(name).\(tld)"
-	}
-
+	/// The positional form pins the hostname to exactly `<name>.localhost`.
+	/// `portless run --name` would additionally prepend a git worktree prefix,
+	/// which would not match the URL shown in the UI.
 	static func wrap(command: String, name: String) -> String {
-		"portless --name \(shellQuote(name)) --force \(command)"
+		"portless \(Shell.quote(name)) \(command)"
 	}
 
-	static func shellQuote(_ value: String) -> String {
-		"'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
-	}
+	// MARK: - Probe
 
-	struct Health: Equatable, Sendable {
+	/// A snapshot of the local portless install. The proxy port and scheme are
+	/// read from live state rather than assumed, because `portless proxy start`
+	/// falls back to an unprivileged port (1355) when it cannot bind 443.
+	struct Probe: Equatable, Sendable {
 		var isInstalled = false
+		var proxyPort = 443
+		var scheme = "https"
 		var proxyIsListening = false
-		var hasState = false
+		var routes: [String: String] = [:]
 
 		var isReady: Bool { isInstalled && proxyIsListening }
 
 		var summary: String {
 			if !isInstalled { return "Not installed" }
 			if !proxyIsListening { return "Proxy not running" }
-			return "Ready"
+			return "Ready on \(scheme)://…:\(proxyPort)"
 		}
 
-		/// Non-nil whenever a portless service is expected to fail to start.
 		var hint: String? {
 			if !isInstalled {
 				return "portless was not found on your PATH. Install it with `\(installCommand)`."
 			}
 			if !proxyIsListening {
-				return "The portless proxy is not listening on port \(proxyPort). Run `\(serviceInstallCommand)` in Terminal — binding 443 needs sudo, which Tools UI cannot answer."
+				return "The portless proxy is not listening on port \(proxyPort). Start it from Settings, or run `\(serviceInstallCommand)` in Terminal to have it start at login."
 			}
 			return nil
 		}
-	}
 
-	static func health() async -> Health {
-		let installed = await resolvesOnPath()
-		let listening = await canConnectToProxy()
-		return Health(
-			isInstalled: installed,
-			proxyIsListening: listening,
-			hasState: FileManager.default.fileExists(atPath: stateDirectory.path)
-		)
-	}
-
-	private static func resolvesOnPath() async -> Bool {
-		await run("command -v portless").status == 0
-	}
-
-	private static func canConnectToProxy() async -> Bool {
-		await withCheckedContinuation { continuation in
-			DispatchQueue.global(qos: .userInitiated).async {
-				continuation.resume(returning: canConnect(port: proxyPort))
-			}
+		var isDefaultPort: Bool {
+			(scheme == "https" && proxyPort == 443) || (scheme == "http" && proxyPort == 80)
 		}
 	}
 
-	private static func canConnect(port: UInt16) -> Bool {
-		let descriptor = socket(AF_INET, SOCK_STREAM, 0)
-		guard descriptor >= 0 else { return false }
-		defer { close(descriptor) }
+	static func probe() async -> Probe {
+		var probe = Probe()
+		probe.isInstalled = await Shell.run("command -v portless", timeout: 10).isSuccess
+		guard probe.isInstalled else { return probe }
 
-		var address = sockaddr_in()
-		address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-		address.sin_family = sa_family_t(AF_INET)
-		address.sin_port = port.bigEndian
-		address.sin_addr.s_addr = inet_addr("127.0.0.1")
+		probe.proxyPort = livePort() ?? 443
+		probe.scheme = liveScheme() ?? (probe.proxyPort == 80 ? "http" : "https")
+		probe.proxyIsListening = Shell.canConnect(port: UInt16(clamping: probe.proxyPort))
+		probe.routes = await routes()
 
-		var timeout = timeval(tv_sec: 1, tv_usec: 0)
-		setsockopt(descriptor, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-
-		let result = withUnsafePointer(to: &address) { pointer in
-			pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { generic in
-				connect(descriptor, generic, socklen_t(MemoryLayout<sockaddr_in>.size))
-			}
+		// A registered route is the most reliable statement of what the proxy
+		// actually serves, so let it correct the guesses above.
+		if let sample = probe.routes.values.first,
+		   let components = URLComponents(string: sample),
+		   let scheme = components.scheme
+		{
+			probe.scheme = scheme
+			probe.proxyPort = components.port ?? (scheme == "https" ? 443 : 80)
+			probe.proxyIsListening = Shell.canConnect(port: UInt16(clamping: probe.proxyPort))
 		}
-		return result == 0
+		return probe
+	}
+
+	private static func livePort() -> Int? {
+		let url = stateDirectory.appendingPathComponent("proxy.port")
+		guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+		return Int(text.trimmingCharacters(in: .whitespacesAndNewlines))
+	}
+
+	private static func liveScheme() -> String? {
+		let url = stateDirectory.appendingPathComponent("proxy.log")
+		guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+		if text.contains("HTTPS proxy listening") { return "https" }
+		if text.contains("HTTP proxy listening") { return "http" }
+		return nil
+	}
+
+	/// Parses `portless list`, whose lines look like:
+	/// `  http://app.localhost:1355  ->  localhost:8088  (alias)`
+	static func routes() async -> [String: String] {
+		let result = await Shell.run("portless list", timeout: 15)
+		guard result.isSuccess else { return [:] }
+
+		var routes: [String: String] = [:]
+		for line in result.output.split(whereSeparator: \.isNewline) {
+			let trimmed = line.trimmingCharacters(in: .whitespaces)
+			guard trimmed.contains("->") else { continue }
+			guard let urlText = trimmed.components(separatedBy: "->").first?.trimmingCharacters(in: .whitespaces) else { continue }
+			guard let host = URLComponents(string: urlText)?.host else { continue }
+			routes[host] = urlText
+		}
+		return routes
+	}
+
+	static func url(name: String, proxy: Probe?, tld: String = defaultTLD) -> String {
+		guard !name.isEmpty else { return "" }
+		let hostname = "\(name).\(tld)"
+		if let existing = proxy?.routes[hostname] { return existing }
+
+		let scheme = proxy?.scheme ?? "https"
+		let port = proxy?.proxyPort ?? 443
+		if proxy?.isDefaultPort ?? (port == 443) {
+			return "\(scheme)://\(hostname)"
+		}
+		return "\(scheme)://\(hostname):\(port)"
+	}
+
+	// MARK: - Aliases
+
+	/// Static route to an already-listening port. This is how containers get a
+	/// name — `portless run` only works for processes portless spawns itself.
+	@discardableResult
+	static func registerAlias(name: String, port: Int) async -> Shell.Result {
+		await Shell.run("portless alias \(Shell.quote(name)) \(port) --force", timeout: 30)
 	}
 
 	@discardableResult
-	static func run(_ command: String) async -> (status: Int32, output: String) {
-		await withCheckedContinuation { continuation in
-			DispatchQueue.global(qos: .userInitiated).async {
-				let process = Process()
-				let pipe = Pipe()
-				process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-				process.arguments = ["-lc", command]
-				process.standardOutput = pipe
-				process.standardError = pipe
-				process.standardInput = FileHandle.nullDevice
-				do {
-					try process.run()
-				} catch {
-					continuation.resume(returning: (127, error.localizedDescription))
-					return
-				}
-				let data = pipe.fileHandleForReading.readDataToEndOfFile()
-				process.waitUntilExit()
-				continuation.resume(returning: (process.terminationStatus, String(data: data, encoding: .utf8) ?? ""))
-			}
-		}
+	static func removeAlias(name: String) async -> Shell.Result {
+		await Shell.run("portless alias --remove \(Shell.quote(name))", timeout: 30)
+	}
+
+	@discardableResult
+	static func startProxy() async -> Shell.Result {
+		await Shell.run(proxyStartCommand, timeout: 60)
 	}
 
 	/// Setup commands need a TTY for their sudo prompt, so hand them to Terminal

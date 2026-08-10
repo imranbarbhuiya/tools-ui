@@ -89,7 +89,7 @@ extension ServiceRunState {
 	var tint: Color {
 		switch self {
 		case .running: .green
-		case .starting: .orange
+		case .starting, .waitingForDependencies: .orange
 		case .failed: .red
 		case .stopped: .secondary
 		}
@@ -99,6 +99,7 @@ extension ServiceRunState {
 		switch self {
 		case .running: "checkmark.circle.fill"
 		case .starting: "arrow.triangle.2.circlepath"
+		case .waitingForDependencies: "hourglass"
 		case .failed: "exclamationmark.triangle.fill"
 		case .stopped: "pause.circle.fill"
 		}
@@ -108,6 +109,7 @@ extension ServiceRunState {
 		switch self {
 		case .stopped: "Stopped"
 		case .starting: "Starting"
+		case .waitingForDependencies: "Waiting"
 		case .running: "Running"
 		case .failed: "Failed"
 		}

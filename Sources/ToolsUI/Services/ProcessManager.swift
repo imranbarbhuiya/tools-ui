@@ -23,8 +23,34 @@ final class ProcessManager: @unchecked Sendable {
 	private let lock = NSLock()
 	private var running: [UUID: Running] = [:]
 
-	func start(service: ManagedService, onEvent: @escaping @Sendable (Event) -> Void) {
-		stop(id: service.id)
+	func start(
+		service: ManagedService,
+		environment: [String: String],
+		onEvent: @escaping @Sendable (Event) -> Void
+	) {
+		run(
+			id: service.id,
+			command: "exec \(service.launchCommand)",
+			cwd: service.workingDirectory,
+			environment: environment,
+			// Under portless the real dev server is a grandchild, so give the
+			// wrapper time to forward SIGTERM and release its route.
+			killGrace: service.usesPortless ? 4.0 : 1.2,
+			onEvent: onEvent
+		)
+	}
+
+	/// Also used to tail `docker logs -f`, which is a long-lived child even though
+	/// the thing it reports on is the container.
+	func run(
+		id: UUID,
+		command: String,
+		cwd: String = "",
+		environment: [String: String] = [:],
+		killGrace: TimeInterval = 1.2,
+		onEvent: @escaping @Sendable (Event) -> Void
+	) {
+		stop(id: id)
 
 		let process = Process()
 		let stdout = Pipe()
@@ -33,15 +59,15 @@ final class ProcessManager: @unchecked Sendable {
 		process.standardError = stderr
 		process.standardInput = FileHandle.nullDevice
 		process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-		process.arguments = ["-lc", "exec \(service.launchCommand)"]
+		process.arguments = ["-lc", command]
 
-		var env = ProcessInfo.processInfo.environment
+		var env = environment.isEmpty ? ProcessInfo.processInfo.environment : environment
 		env["TERM"] = "dumb"
 		process.environment = env
 
-		let cwd = service.workingDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
-		if !cwd.isEmpty {
-			process.currentDirectoryURL = URL(fileURLWithPath: cwd, isDirectory: true)
+		let directory = cwd.trimmingCharacters(in: .whitespacesAndNewlines)
+		if !directory.isEmpty {
+			process.currentDirectoryURL = URL(fileURLWithPath: directory, isDirectory: true)
 		}
 
 		let outHandle = stdout.fileHandleForReading
@@ -62,27 +88,27 @@ final class ProcessManager: @unchecked Sendable {
 			outHandle.readabilityHandler = nil
 			errHandle.readabilityHandler = nil
 			self?.lock.lock()
-			self?.running[service.id] = nil
+			self?.running[id] = nil
 			self?.lock.unlock()
 			onEvent(.exited(proc.terminationStatus))
 		}
 
 		do {
 			try process.run()
-			// Under portless the real dev server is a grandchild, so give the
-			// wrapper time to forward SIGTERM and release its route.
-			let item = Running(
-				id: service.id,
-				process: process,
-				killGrace: service.usesPortless ? 4.0 : 1.2
-			)
+			let item = Running(id: id, process: process, killGrace: killGrace)
 			lock.lock()
-			running[service.id] = item
+			running[id] = item
 			lock.unlock()
 			onEvent(.started(pid: process.processIdentifier))
 		} catch {
 			onEvent(.failed(error.localizedDescription))
 		}
+	}
+
+	func isRunning(id: UUID) -> Bool {
+		lock.lock()
+		defer { lock.unlock() }
+		return running[id]?.process.isRunning ?? false
 	}
 
 	func stop(id: UUID) {

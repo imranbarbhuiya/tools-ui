@@ -13,7 +13,7 @@ struct SettingsView: View {
 				}
 				.listRowBackground(Color.clear)
 				LabeledContent("Services") {
-					Text("\(store.services.count)")
+					Text("\(store.processServices.count) process · \(store.dockerServices.count) docker")
 						.foregroundStyle(.secondary)
 				}
 				LabeledContent("Running") {
@@ -26,24 +26,87 @@ struct SettingsView: View {
 
 			Section {
 				LabeledContent("Status") {
-					if let health = store.portlessHealth {
-						Label(health.summary, systemImage: health.isReady ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-							.font(.caption.weight(.semibold))
-							.foregroundStyle(health.isReady ? .green : .orange)
+					if let availability = store.dockerAvailability {
+						Label(
+							availability.summary,
+							systemImage: availability.isReady ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+						)
+						.font(.caption.weight(.semibold))
+						.foregroundStyle(availability.isReady ? .green : .orange)
 					} else {
-						Text("Checking…")
-							.foregroundStyle(.secondary)
+						Text("Checking…").foregroundStyle(.secondary)
 					}
 				}
-
-				if let health = store.portlessHealth, let hint = health.hint {
+				if let hint = store.dockerAvailability?.hint {
 					Text(hint)
 						.font(.caption)
 						.foregroundStyle(.secondary)
-					if !health.isInstalled {
-						Button("Install portless…") { Portless.openInTerminal(Portless.installCommand) }
+				}
+				LabeledContent("Containers") {
+					Text("\(store.dockerContainers.count) known · \(store.unmanagedContainers.count) unmanaged")
+						.foregroundStyle(.secondary)
+				}
+				Button("Re-scan Docker") {
+					Task {
+						store.dockerAvailability = nil
+						await store.refreshDocker()
+					}
+				}
+			} header: {
+				Text("Docker")
+			} footer: {
+				Text("Containers are started and stopped with the docker CLI. Quitting Tools UI leaves them running.")
+			}
+
+			Section {
+				LabeledContent("Status") {
+					if let portless = store.portless {
+						Label(
+							portless.summary,
+							systemImage: portless.isReady ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+						)
+						.font(.caption.weight(.semibold))
+						.foregroundStyle(portless.isReady ? .green : .orange)
 					} else {
-						Button("Start proxy at login…") { Portless.openInTerminal(Portless.serviceInstallCommand) }
+						Text("Checking…").foregroundStyle(.secondary)
+					}
+				}
+
+				if let portless = store.portless {
+					if let hint = portless.hint {
+						Text(hint)
+							.font(.caption)
+							.foregroundStyle(.secondary)
+						if !portless.isInstalled {
+							Button("Install portless…") { Portless.openInTerminal(Portless.installCommand) }
+						} else {
+							Button("Start proxy now") {
+								Task {
+									await Portless.startProxy()
+									await store.refreshPortless()
+								}
+							}
+							.help("Starts on an unprivileged port without asking for a password")
+							Button("Start proxy on 443 (sudo)…") {
+								Portless.openInTerminal(Portless.proxyStartCommand)
+							}
+							Button("Start proxy at login…") {
+								Portless.openInTerminal(Portless.serviceInstallCommand)
+							}
+						}
+					}
+
+					if !portless.routes.isEmpty {
+						LabeledContent("Routes") {
+							VStack(alignment: .trailing, spacing: 2) {
+								ForEach(portless.routes.keys.sorted(), id: \.self) { host in
+									Text(portless.routes[host] ?? host)
+										.font(.caption2.monospaced())
+										.foregroundStyle(.secondary)
+										.textSelection(.enabled)
+								}
+							}
+						}
 					}
 				}
 
@@ -51,12 +114,12 @@ struct SettingsView: View {
 				Button("Run doctor…") { Portless.openInTerminal(Portless.doctorCommand) }
 				Button("Prune orphaned dev servers…") { Portless.openInTerminal(Portless.pruneCommand) }
 				Button("Re-check") {
-					Task { await store.refreshPortlessHealth() }
+					Task { await store.refreshPortless() }
 				}
 			} header: {
 				Text("Portless")
 			} footer: {
-				Text("Setup runs in Terminal because binding port 443 and trusting the local CA need a sudo prompt Tools UI cannot answer.")
+				Text("Binding port 443 and trusting the local CA need a sudo prompt Tools UI cannot answer, so those run in Terminal.")
 			}
 
 			Section {
@@ -81,9 +144,9 @@ struct SettingsView: View {
 		}
 		.formStyle(.grouped)
 		.padding()
-		.frame(width: 440)
+		.frame(width: 460)
 		.task {
-			await store.refreshPortlessHealth()
+			await store.refreshAll()
 		}
 	}
 }
