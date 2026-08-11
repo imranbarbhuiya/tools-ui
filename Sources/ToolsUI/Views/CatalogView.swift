@@ -32,70 +32,148 @@ struct CatalogView: View {
 		}
 	}
 
+	private var canAdd: Bool {
+		selected != nil && !containerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+	}
+
 	var body: some View {
-		NavigationStack {
+		VStack(spacing: 0) {
+			headerBar
+			Divider()
 			HSplitView {
 				list
-					.frame(minWidth: 260, idealWidth: 280, maxWidth: 340)
+					.frame(minWidth: 240, idealWidth: 280, maxWidth: 340)
 				detail
-					.frame(minWidth: 380)
+					.frame(minWidth: 400)
 			}
-			.frame(minWidth: 720, minHeight: 520)
-			.navigationTitle("Add from Docker")
-			.toolbar {
-				ToolbarItem(placement: .cancellationAction) {
-					Button("Cancel") { dismiss() }
-						.keyboardShortcut(.cancelAction)
+			.frame(maxWidth: .infinity, maxHeight: .infinity)
+			Divider()
+			footerBar
+		}
+		.frame(minWidth: 760, minHeight: 540)
+		.background()
+	}
+
+	private var headerBar: some View {
+		HStack(spacing: 14) {
+			Text("Add from Docker")
+				.font(.headline)
+			Spacer(minLength: 12)
+			HStack(spacing: 6) {
+				Image(systemName: "magnifyingglass")
+					.font(.caption.weight(.semibold))
+					.foregroundStyle(.secondary)
+				TextField("Search apps", text: $search)
+					.textFieldStyle(.plain)
+					.font(.callout)
+				if !search.isEmpty {
+					Button {
+						search = ""
+					} label: {
+						Image(systemName: "xmark.circle.fill")
+							.font(.caption)
+							.foregroundStyle(.tertiary)
+					}
+					.buttonStyle(.plain)
 				}
-				ToolbarItem(placement: .confirmationAction) {
-					Button(startNow ? "Add & Start" : "Add") { add() }
-						.keyboardShortcut(.defaultAction)
-						.disabled(selected == nil || containerName.isEmpty)
-				}
+			}
+			.padding(.horizontal, 10)
+			.padding(.vertical, 7)
+			.frame(width: 220)
+			.background {
+				RoundedRectangle(cornerRadius: 8, style: .continuous)
+					.fill(Color(nsColor: .controlBackgroundColor))
+					.overlay {
+						RoundedRectangle(cornerRadius: 8, style: .continuous)
+							.strokeBorder(.quaternary, lineWidth: 1)
+					}
 			}
 		}
+		.padding(.horizontal, 18)
+		.padding(.vertical, 12)
+	}
+
+	private var footerBar: some View {
+		HStack(spacing: 10) {
+			Spacer(minLength: 0)
+			Button("Cancel") { dismiss() }
+				.keyboardShortcut(.cancelAction)
+			Button(startNow ? "Add & Start" : "Add") { add() }
+				.keyboardShortcut(.defaultAction)
+				.buttonStyle(.borderedProminent)
+				.disabled(!canAdd)
+		}
+		.padding(.horizontal, 18)
+		.padding(.vertical, 12)
 	}
 
 	private var list: some View {
 		VStack(spacing: 0) {
 			List(selection: Binding(get: { selected?.id }, set: { id in
-				if let app = Catalog.apps.first(where: { $0.id == id }) { choose(app) }
+				guard let id else { return }
+				if let app = Catalog.apps.first(where: { $0.id == id }) {
+					choose(app)
+				} else if let selected, selected.id == id {
+					return
+				}
 			})) {
-				ForEach(groups, id: \.0) { category, apps in
-					Section(category) {
-						ForEach(apps) { app in
-							HStack(spacing: 10) {
-								Image(systemName: app.symbol)
-									.font(.body)
-									.foregroundStyle(Theme.accent(for: app.name))
-									.frame(width: 22)
-								VStack(alignment: .leading, spacing: 1) {
-									Text(app.name)
-										.font(.body.weight(.medium))
-									Text(app.image)
-										.font(.caption2.monospaced())
-										.foregroundStyle(.tertiary)
-										.lineLimit(1)
-										.truncationMode(.middle)
-								}
-								Spacer(minLength: 0)
-								if !app.isWeb {
-									Image(systemName: "cylinder.fill")
-										.font(.caption2)
-										.foregroundStyle(.tertiary)
-										.help("Not an HTTP service — useful as a dependency")
-								}
+				if groups.isEmpty {
+					ContentUnavailableView {
+						Label("No matches", systemImage: "magnifyingglass")
+					} description: {
+						Text("Try a different search, or pull any image below.")
+					}
+					.frame(maxWidth: .infinity, minHeight: 160)
+					.listRowBackground(Color.clear)
+					.listRowSeparator(.hidden)
+				} else {
+					ForEach(groups, id: \.0) { category, apps in
+						Section(category) {
+							ForEach(apps) { app in
+								catalogRow(app)
+									.tag(app.id)
 							}
-							.tag(app.id)
+						}
+					}
+					if let selected, selected.id.hasPrefix("custom:") {
+						Section("Custom") {
+							catalogRow(selected)
+								.tag(selected.id)
 						}
 					}
 				}
 			}
-			.searchable(text: $search, placement: .sidebar, prompt: "Search apps")
-
+			.listStyle(.sidebar)
 			Divider()
 			customImageBar
 		}
+	}
+
+	private func catalogRow(_ app: CatalogApp) -> some View {
+		HStack(spacing: 10) {
+			Image(systemName: app.symbol)
+				.font(.body)
+				.foregroundStyle(Theme.accent(for: app.name))
+				.frame(width: 22)
+			VStack(alignment: .leading, spacing: 1) {
+				Text(app.name)
+					.font(.body.weight(.medium))
+				Text(app.image)
+					.font(.caption2.monospaced())
+					.foregroundStyle(.tertiary)
+					.lineLimit(1)
+					.truncationMode(.middle)
+			}
+			Spacer(minLength: 0)
+			if !app.isWeb {
+				Image(systemName: "cylinder.fill")
+					.font(.caption2)
+					.foregroundStyle(.tertiary)
+					.help("Not an HTTP service — useful as a dependency")
+			}
+		}
+		.padding(.vertical, 2)
+		.contentShape(Rectangle())
 	}
 
 	private var customImageBar: some View {
@@ -127,7 +205,7 @@ struct CatalogView: View {
 					.lineLimit(2)
 			}
 		}
-		.padding(10)
+		.padding(12)
 		.background(.bar)
 	}
 
@@ -137,7 +215,6 @@ struct CatalogView: View {
 			ScrollView {
 				VStack(alignment: .leading, spacing: 18) {
 					header(app)
-
 					InsetCard(title: "Container") {
 						VStack(alignment: .leading, spacing: 10) {
 							LabeledContent("Name") {
@@ -152,7 +229,6 @@ struct CatalogView: View {
 							}
 						}
 					}
-
 					InsetCard(title: "Ports") {
 						VStack(alignment: .leading, spacing: 8) {
 							ForEach(app.ports, id: \.containerPort) { port in
@@ -168,19 +244,15 @@ struct CatalogView: View {
 									.textFieldStyle(.roundedBorder)
 									.font(.caption.monospaced())
 									.frame(width: 72)
-
 									Image(systemName: "arrow.right")
 										.font(.caption2)
 										.foregroundStyle(.tertiary)
-
 									Text("\(port.containerPort)")
 										.font(.caption.monospaced())
 										.frame(width: 54, alignment: .leading)
-
 									Text(port.label)
 										.font(.caption)
 										.foregroundStyle(.secondary)
-
 									if !port.isHTTP {
 										Text("TCP")
 											.font(.caption2.weight(.medium))
@@ -189,9 +261,7 @@ struct CatalogView: View {
 											.padding(.vertical, 1)
 											.background(Color.secondary.opacity(0.12), in: Capsule())
 									}
-
 									Spacer(minLength: 0)
-
 									if !Shell.isPortFree(hostPorts[port.containerPort] ?? port.suggestedHostPort) {
 										Label("in use", systemImage: "exclamationmark.triangle.fill")
 											.font(.caption2)
@@ -201,13 +271,11 @@ struct CatalogView: View {
 							}
 						}
 					}
-
 					if !env.isEmpty {
 						InsetCard(title: "Environment") {
 							EnvEditor(entries: $env)
 						}
 					}
-
 					if !app.providedEnv.isEmpty {
 						InsetCard(title: "Provides to dependents") {
 							VStack(alignment: .leading, spacing: 4) {
@@ -230,7 +298,6 @@ struct CatalogView: View {
 							}
 						}
 					}
-
 					InsetCard(title: "Options") {
 						VStack(alignment: .leading, spacing: 8) {
 							Toggle("Give it a portless hostname", isOn: $enablePortless)
@@ -259,6 +326,7 @@ struct CatalogView: View {
 			} description: {
 				Text("Choose a packaged app to run in Docker, or pull any image by name below the list.")
 			}
+			.frame(maxWidth: .infinity, maxHeight: .infinity)
 			.background()
 		}
 	}
@@ -288,11 +356,10 @@ struct CatalogView: View {
 		}
 	}
 
-	// MARK: - Actions
-
 	private func choose(_ app: CatalogApp) {
 		selected = app
-		containerName = uniqueName(base: app.id)
+		let base = app.id.hasPrefix("custom:") ? app.name : app.id
+		containerName = uniqueName(base: base)
 		env = app.env
 		enablePortless = app.isWeb
 		hostPorts = [:]
@@ -315,8 +382,6 @@ struct CatalogView: View {
 		return candidate
 	}
 
-	/// Pulls an arbitrary image and reads its EXPOSE list so the port fields can
-	/// be prefilled without the user knowing the image internals.
 	private func inspectCustom() {
 		let image = customImage.trimmingCharacters(in: .whitespacesAndNewlines)
 		guard !image.isEmpty else { return }
