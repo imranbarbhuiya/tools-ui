@@ -124,6 +124,6 @@ using whatever host port that container actually published. The editor's
 
 ## Notes
 
-- Commands run via `/bin/zsh -lc 'exec …'` so your shell `PATH` (bun, node, etc.) is used
+- Commands run via `/bin/zsh -lc 'exec …'` with user tool dirs prepended to `PATH` (`~/.bun/bin`, Homebrew, Cargo, asdf) so GUI launches still find bun, node, and friends
 - Logs stream into the detail pane; container logs come from `docker logs -f`
 - Quit from the menu bar ends managed processes but leaves containers running

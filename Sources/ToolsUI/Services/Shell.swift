@@ -14,6 +14,18 @@ enum Shell {
 		}
 	}
 
+	static let userPATH: String = enrichedPATH(ProcessInfo.processInfo.environment["PATH"] ?? "")
+
+	static func loginCommand(_ command: String) -> String {
+		"export PATH=\(quote(userPATH)):\"$PATH\"; \(command)"
+	}
+
+	static func applyUserPATH(to environment: [String: String]) -> [String: String] {
+		var env = environment
+		env["PATH"] = userPATH
+		return env
+	}
+
 	/// Runs through a login shell so PATH matches Terminal — docker and portless
 	/// often live in version-manager shims (fnm, asdf) that a bare exec misses.
 	@discardableResult
@@ -28,7 +40,7 @@ enum Shell {
 				let process = Process()
 				let pipe = Pipe()
 				process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-				process.arguments = ["-lc", command]
+				process.arguments = ["-lc", loginCommand(command)]
 				process.standardOutput = pipe
 				process.standardError = pipe
 				process.standardInput = FileHandle.nullDevice
@@ -37,7 +49,7 @@ enum Shell {
 					process.currentDirectoryURL = URL(fileURLWithPath: cwd, isDirectory: true)
 				}
 
-				var env = ProcessInfo.processInfo.environment
+				var env = applyUserPATH(to: ProcessInfo.processInfo.environment)
 				if nonInteractive {
 					// Without this portless blocks on a sudo TTY prompt the app can
 					// never answer; it exits with a readable error instead.
@@ -89,7 +101,7 @@ enum Shell {
 				let process = Process()
 				let pipe = Pipe()
 				process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-				process.arguments = ["-lc", command]
+				process.arguments = ["-lc", loginCommand(command)]
 				process.standardOutput = pipe
 				process.standardError = pipe
 				process.standardInput = FileHandle.nullDevice
@@ -97,7 +109,7 @@ enum Shell {
 				if let cwd, !cwd.isEmpty {
 					process.currentDirectoryURL = URL(fileURLWithPath: cwd, isDirectory: true)
 				}
-				var env = ProcessInfo.processInfo.environment
+				var env = applyUserPATH(to: ProcessInfo.processInfo.environment)
 				env["CI"] = "1"
 				env["TERM"] = "dumb"
 				process.environment = env
@@ -138,6 +150,33 @@ enum Shell {
 
 	static func quote(_ value: String) -> String {
 		"'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+	}
+
+	private static func enrichedPATH(_ base: String) -> String {
+		let home = FileManager.default.homeDirectoryForCurrentUser.path
+		let extras = [
+			"\(home)/.bun/bin",
+			"\(home)/.local/bin",
+			"\(home)/.cargo/bin",
+			"\(home)/.asdf/shims",
+			"/opt/homebrew/bin",
+			"/opt/homebrew/sbin",
+			"/usr/local/bin",
+		]
+		var parts: [String] = []
+		var seen = Set<String>()
+		func append(_ item: String) {
+			guard !item.isEmpty, !seen.contains(item) else { return }
+			seen.insert(item)
+			parts.append(item)
+		}
+		for extra in extras where FileManager.default.fileExists(atPath: extra) {
+			append(extra)
+		}
+		for item in base.split(separator: ":").map(String.init) {
+			append(item)
+		}
+		return parts.joined(separator: ":")
 	}
 
 	/// TCP connect probe used for readiness gating.

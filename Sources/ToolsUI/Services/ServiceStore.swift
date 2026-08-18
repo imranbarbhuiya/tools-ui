@@ -237,7 +237,7 @@ final class ServiceStore {
 	}
 
 	func resolvedEnvironment(for service: ManagedService) -> [String: String] {
-		var environment = ProcessInfo.processInfo.environment
+		var environment = Shell.applyUserPATH(to: ProcessInfo.processInfo.environment)
 		for variable in resolvedEnvVars(for: service) {
 			environment[variable.key] = variable.value
 		}

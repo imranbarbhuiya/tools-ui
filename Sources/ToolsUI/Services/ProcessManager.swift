@@ -59,9 +59,11 @@ final class ProcessManager: @unchecked Sendable {
 		process.standardError = stderr
 		process.standardInput = FileHandle.nullDevice
 		process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-		process.arguments = ["-lc", command]
+		process.arguments = ["-lc", Shell.loginCommand(command)]
 
-		var env = environment.isEmpty ? ProcessInfo.processInfo.environment : environment
+		var env = Shell.applyUserPATH(
+			to: environment.isEmpty ? ProcessInfo.processInfo.environment : environment
+		)
 		env["TERM"] = "dumb"
 		process.environment = env
 
