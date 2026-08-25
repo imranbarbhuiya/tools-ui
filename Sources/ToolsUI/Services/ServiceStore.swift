@@ -41,6 +41,8 @@ final class ServiceStore {
 		if services.isEmpty {
 			services = Self.seed
 			save()
+		} else if adoptNewSeeds() {
+			save()
 		}
 		for service in services {
 			statuses[service.id] = ServiceStatus()
@@ -844,6 +846,17 @@ final class ServiceStore {
 		try? data.write(to: saveURL, options: .atomic)
 	}
 
+	/// Seeding only runs on an empty config, so a seed added in a later build would
+	/// never reach an existing install. Take in the ones this config has not seen.
+	/// Deleting a seeded service brings it back on the next launch.
+	private func adoptNewSeeds() -> Bool {
+		let known = Set(services.map(\.name))
+		let missing = Self.seed.filter { !known.contains($0.name) }
+		guard !missing.isEmpty else { return false }
+		services.append(contentsOf: missing)
+		return true
+	}
+
 	private static var seed: [ManagedService] {
 		let home = FileManager.default.homeDirectoryForCurrentUser.path
 		return [
@@ -854,6 +867,26 @@ final class ServiceStore {
 				url: "http://localhost:3456",
 				autoStart: false,
 				notes: "Video frame parser"
+			),
+			ManagedService(
+				name: "Slack status",
+				workingDirectory: "\(home)/Documents/open-source/slack-status",
+				command: "bun run start",
+				url: "http://localhost:3478",
+				autoStart: false,
+				notes: "Energy and stress Slack status",
+				portlessEnabled: true,
+				portlessName: "slack-status"
+			),
+			ManagedService(
+				name: "Template Lens",
+				workingDirectory: "\(home)/Documents/open-source/template-lens",
+				command: "bun run start",
+				url: "http://localhost:3457",
+				autoStart: false,
+				notes: "Handlebars template previewer",
+				portlessEnabled: true,
+				portlessName: "template-lens"
 			),
 		]
 	}
