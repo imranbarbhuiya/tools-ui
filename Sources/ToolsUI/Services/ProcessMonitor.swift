@@ -26,6 +26,8 @@ struct PortListener: Identifiable, Hashable, Sendable {
 	let port: Int
 	let kind: ListenerKind
 	let command: String
+	let parentPID: Int
+	let parentProcess: String
 
 	var endpoint: String { "\(address):\(port)" }
 }
@@ -102,6 +104,8 @@ final class ProcessMonitor {
 		var process = "Unknown"
 		var ownerUID: UInt32 = UInt32.max
 		var command = ""
+		var parentPID = 0
+		var parentProcess = ""
 
 		for raw in lsof.output.split(separator: "\n") {
 			guard let prefix = raw.first else { continue }
@@ -110,6 +114,7 @@ final class ProcessMonitor {
 			case "p":
 				pid = Int(value) ?? 0
 				command = commandForPID(pid)
+				(parentPID, parentProcess) = parentDetails(for: pid)
 			case "c": process = value
 			case "u": ownerUID = UInt32(value) ?? UInt32.max
 			case "n":
@@ -117,7 +122,7 @@ final class ProcessMonitor {
 				let kind = classify(process: process, command: command, ownerUID: ownerUID, currentUID: uid)
 				let owner = ownerUID == uid ? user : "UID \(ownerUID)"
 				if includeSystem || kind != .system {
-					result.append(PortListener(process: process, pid: pid, user: owner, proto: "TCP", address: parsed.address, port: parsed.port, kind: kind, command: command))
+					result.append(PortListener(process: process, pid: pid, user: owner, proto: "TCP", address: parsed.address, port: parsed.port, kind: kind, command: command, parentPID: parentPID, parentProcess: parentProcess))
 				}
 			default: break
 			}
@@ -161,6 +166,19 @@ final class ProcessMonitor {
 			return name + command.dropFirst(executable.count)
 		}
 		return command
+	}
+
+	private nonisolated static func parentDetails(for pid: Int) -> (Int, String) {
+		guard pid > 1 else { return (0, "") }
+		let parentText = run("/bin/ps", ["-p", String(pid), "-o", "ppid="])
+			.output.trimmingCharacters(in: .whitespacesAndNewlines)
+		guard let parentPID = Int(parentText), parentPID > 1 else { return (0, "") }
+
+		let executable = run("/bin/ps", ["-ww", "-p", String(parentPID), "-o", "comm="])
+			.output.trimmingCharacters(in: .whitespacesAndNewlines)
+		let name = URL(fileURLWithPath: executable).lastPathComponent
+		guard !name.isEmpty, name != "launchd" else { return (0, "") }
+		return (parentPID, name)
 	}
 
 	private nonisolated static func run(_ executable: String, _ arguments: [String]) -> (status: Int32, output: String) {

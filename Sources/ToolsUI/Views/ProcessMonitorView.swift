@@ -13,6 +13,7 @@ struct ProcessMonitorView: View {
 		return monitor.displayedListeners.filter {
 			$0.process.localizedCaseInsensitiveContains(query)
 				|| $0.command.localizedCaseInsensitiveContains(query)
+				|| $0.parentProcess.localizedCaseInsensitiveContains(query)
 				|| String($0.port).contains(query)
 				|| $0.kind.rawValue.localizedCaseInsensitiveContains(query)
 		}
@@ -90,9 +91,17 @@ struct ProcessMonitorView: View {
 			TableColumn("Process") { row in
 				VStack(alignment: .leading, spacing: 2) {
 					Text(row.process).fontWeight(.medium)
-					Text("PID \(row.pid)").font(.caption.monospaced()).foregroundStyle(.tertiary)
+					HStack(spacing: 5) {
+						Text("PID \(row.pid)")
+						if !row.parentProcess.isEmpty {
+							Text("· Started by \(row.parentProcess)")
+						}
+					}
+					.font(.caption.monospaced())
+					.foregroundStyle(.tertiary)
+					.help(row.parentProcess.isEmpty ? "PID \(row.pid)" : "Started by \(row.parentProcess) (PID \(row.parentPID))")
 				}
-			}.width(min: 130, ideal: 190)
+			}.width(min: 160, ideal: 240)
 			TableColumn("Type") { row in KindBadge(kind: row.kind) }.width(min: 105, ideal: 120)
 			TableColumn("Listening on") { row in Text(row.endpoint).font(.callout.monospaced()).textSelection(.enabled) }.width(min: 140, ideal: 190)
 			TableColumn("Started with") { row in CommandCell(command: row.command) }
