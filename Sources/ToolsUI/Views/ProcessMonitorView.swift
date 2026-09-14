@@ -78,7 +78,7 @@ struct ProcessMonitorView: View {
 			}.width(min: 130, ideal: 190)
 			TableColumn("Type") { row in KindBadge(kind: row.kind) }.width(min: 105, ideal: 120)
 			TableColumn("Listening on") { row in Text(row.endpoint).font(.callout.monospaced()).textSelection(.enabled) }.width(min: 140, ideal: 190)
-			TableColumn("Command") { row in Text(row.command).font(.callout.monospaced()).lineLimit(1).truncationMode(.middle).help(row.command) }
+			TableColumn("Command") { row in CommandCell(command: row.command) }
 		}
 		.contextMenu(forSelectionType: PortListener.ID.self) { ids in
 			if let id = ids.first, let row = rows.first(where: { $0.id == id }) {
@@ -113,5 +113,30 @@ private struct KindBadge: View {
 			.font(.caption.weight(.semibold)).foregroundStyle(color)
 			.padding(.horizontal, 8).padding(.vertical, 4)
 			.background(color.opacity(0.12), in: Capsule())
+	}
+}
+
+private struct CommandCell: View {
+	let command: String
+	@State private var isHovering = false
+
+	var body: some View {
+		Text(command)
+			.font(.callout.monospaced())
+			.lineLimit(1)
+			.truncationMode(.middle)
+			.frame(maxWidth: .infinity, alignment: .leading)
+			.contentShape(Rectangle())
+			.onHover { hovering in
+				isHovering = hovering && !command.isEmpty
+			}
+			.popover(isPresented: $isHovering, arrowEdge: .bottom) {
+				Text(command)
+					.font(.callout.monospaced())
+					.textSelection(.enabled)
+					.fixedSize(horizontal: false, vertical: true)
+					.frame(minWidth: 320, idealWidth: 520, maxWidth: 640, alignment: .leading)
+					.padding(12)
+			}
 	}
 }
