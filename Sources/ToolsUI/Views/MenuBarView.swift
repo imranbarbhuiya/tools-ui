@@ -21,6 +21,11 @@ struct MenuBarView: View {
 		}
 		.keyboardShortcut("m", modifiers: [.command])
 
+		Button("Ports & Processes…", systemImage: "point.3.connected.trianglepath.dotted") {
+			openWindow(id: "process-finder")
+			NSApp.activate(ignoringOtherApps: true)
+		}
+
 		if store.anyRunning {
 			Button("Stop All", systemImage: "stop.circle", role: .destructive) {
 				store.stopAll()

@@ -33,6 +33,13 @@ open -a "Tools UI"
 Second `open` reuses the same instance (no second menu icon).
 
 Menu bar only (accessory) — bolt icon; manager window when you need it.
+
+## Ports & processes
+
+Choose **Ports & Processes…** from the menu bar or use the network button in the
+manager toolbar. It shows every listening TCP port, the owning process and PID,
+and classifies it as a local service, a known port forward, or a system process.
+System listeners are hidden by default and can be revealed from the window toolbar.
 ## Use
 
 1. **Open Manager…** from the menu bar

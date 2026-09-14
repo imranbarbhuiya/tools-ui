@@ -11,6 +11,7 @@ enum AppIdentity {
 struct ToolsUIApp: App {
 	@NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 	@State private var store = ServiceStore()
+	@State private var processMonitor = ProcessMonitor()
 	@State private var showManager = false
 
 	var body: some Scene {
@@ -32,6 +33,13 @@ struct ToolsUIApp: App {
 		.commands {
 			CommandGroup(replacing: .newItem) {}
 		}
+
+		Window("Ports & Processes", id: "process-finder") {
+			ProcessMonitorView(monitor: processMonitor)
+				.frame(minWidth: 860, minHeight: 560)
+		}
+		.defaultSize(width: 1040, height: 680)
+		.windowResizability(.contentMinSize)
 
 		Settings {
 			SettingsView(store: store)

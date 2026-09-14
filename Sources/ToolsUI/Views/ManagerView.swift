@@ -3,6 +3,7 @@ import SwiftUI
 
 struct ManagerView: View {
 	@Bindable var store: ServiceStore
+	@Environment(\.openWindow) private var openWindow
 	@State private var selection: UUID?
 	@State private var editor: EditorMode?
 	@State private var sheet: SheetMode?
@@ -169,6 +170,14 @@ struct ManagerView: View {
 		.navigationSplitViewColumnWidth(min: Theme.sidebarMin, ideal: Theme.sidebarIdeal, max: 340)
 		.toolbar {
 			ToolbarItemGroup(placement: .primaryAction) {
+				Button {
+					openWindow(id: "process-finder")
+					NSApp.activate(ignoringOtherApps: true)
+				} label: {
+					Label("Ports & Processes", systemImage: "point.3.connected.trianglepath.dotted")
+				}
+				.help("Inspect listening ports and processes")
+
 				Menu {
 					Button("Add from Folder…", systemImage: "folder.badge.plus") { sheet = .folder }
 						.keyboardShortcut("o", modifiers: [.command])
