@@ -120,8 +120,18 @@ private struct CommandCell: View {
 	let command: String
 	@State private var isHovering = false
 
+	private var displayCommand: String {
+		command.replacingOccurrences(of: NSHomeDirectory(), with: "~")
+	}
+
+	private var wrappableCommand: String {
+		displayCommand
+			.replacingOccurrences(of: "/", with: "/\u{200B}")
+			.replacingOccurrences(of: " ", with: " \u{200B}")
+	}
+
 	var body: some View {
-		Text(command)
+		Text(displayCommand)
 			.font(.callout.monospaced())
 			.lineLimit(1)
 			.truncationMode(.middle)
@@ -131,11 +141,12 @@ private struct CommandCell: View {
 				isHovering = hovering && !command.isEmpty
 			}
 			.popover(isPresented: $isHovering, arrowEdge: .bottom) {
-				Text(command)
+				Text(wrappableCommand)
 					.font(.callout.monospaced())
 					.textSelection(.enabled)
+					.lineLimit(nil)
 					.fixedSize(horizontal: false, vertical: true)
-					.frame(minWidth: 320, idealWidth: 520, maxWidth: 640, alignment: .leading)
+					.frame(width: 620, alignment: .leading)
 					.padding(12)
 			}
 	}
