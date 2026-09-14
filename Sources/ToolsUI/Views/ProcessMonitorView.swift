@@ -5,6 +5,7 @@ struct ProcessMonitorView: View {
 	@Bindable var monitor: ProcessMonitor
 	@State private var search = ""
 	@State private var selection: PortListener.ID?
+	@State private var pendingTermination: PortListener?
 
 	private var rows: [PortListener] {
 		let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -39,6 +40,22 @@ struct ProcessMonitorView: View {
 			}
 		}
 		.onChange(of: monitor.showSystem) { _, _ in Task { await monitor.refresh() } }
+		.confirmationDialog(
+			pendingTermination.map { "Terminate \($0.process)?" } ?? "Terminate process?",
+			isPresented: Binding(
+				get: { pendingTermination != nil },
+				set: { if !$0 { pendingTermination = nil } }
+			),
+			presenting: pendingTermination
+		) { listener in
+			Button("Terminate PID \(listener.pid)", role: .destructive) {
+				pendingTermination = nil
+				Task { await monitor.terminate(listener) }
+			}
+			Button("Cancel", role: .cancel) { pendingTermination = nil }
+		} message: { listener in
+			Text("This sends SIGTERM to the process started with:\n\(listener.command)")
+		}
 		.toolbar {
 			ToolbarItemGroup {
 				Toggle(isOn: $monitor.showSystem) { Label("System processes", systemImage: "gearshape.2") }
@@ -78,12 +95,28 @@ struct ProcessMonitorView: View {
 			}.width(min: 130, ideal: 190)
 			TableColumn("Type") { row in KindBadge(kind: row.kind) }.width(min: 105, ideal: 120)
 			TableColumn("Listening on") { row in Text(row.endpoint).font(.callout.monospaced()).textSelection(.enabled) }.width(min: 140, ideal: 190)
-			TableColumn("Command") { row in CommandCell(command: row.command) }
+			TableColumn("Started with") { row in CommandCell(command: row.command) }
+			TableColumn("") { row in
+				if row.kind != .system {
+					Button {
+						pendingTermination = row
+					} label: {
+						Image(systemName: "stop.circle")
+					}
+					.buttonStyle(.borderless)
+					.foregroundStyle(.secondary)
+					.help("Terminate \(row.process) (PID \(row.pid))")
+				}
+			}.width(32)
 		}
 		.contextMenu(forSelectionType: PortListener.ID.self) { ids in
 			if let id = ids.first, let row = rows.first(where: { $0.id == id }) {
 				Button("Copy port") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(String(row.port), forType: .string) }
 				Button("Copy command") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(row.command, forType: .string) }
+				if row.kind != .system {
+					Divider()
+					Button("Terminate process…", systemImage: "stop.circle", role: .destructive) { pendingTermination = row }
+				}
 			}
 		}
 	}

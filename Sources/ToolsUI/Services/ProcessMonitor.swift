@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import Darwin
 
 enum ListenerKind: String, Sendable {
 	case local = "Local"
@@ -57,6 +58,26 @@ final class ProcessMonitor {
 		error = snapshot.error
 		updatedAt = Date()
 		isRefreshing = false
+	}
+
+	func terminate(_ listener: PortListener) async {
+		guard listener.pid > 1, listener.kind != .system else {
+			error = "This process cannot be terminated from Process Finder."
+			return
+		}
+
+		let result = await Task.detached(priority: .userInitiated) {
+			if Darwin.kill(pid_t(listener.pid), SIGTERM) == 0 { return nil as String? }
+			return String(cString: strerror(errno))
+		}.value
+
+		if let result {
+			error = "Could not terminate \(listener.process) (PID \(listener.pid)): \(result)"
+			return
+		}
+
+		try? await Task.sleep(for: .milliseconds(500))
+		await refresh()
 	}
 
 	private nonisolated static func snapshot(includeSystem: Bool) -> (listeners: [PortListener], total: Int, visible: Int, error: String?) {
