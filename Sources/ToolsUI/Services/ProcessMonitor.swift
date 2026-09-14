@@ -53,10 +53,23 @@ struct PortListener: Identifiable, Hashable, Sendable {
 	var endpoint: String { "\(address):\(port)" }
 }
 
+struct DeveloperProcess: Identifiable, Hashable, Sendable {
+	var id: Int { pid }
+	let process: String
+	let pid: Int
+	let parentPID: Int
+	let parentProcess: String
+	let command: String
+	let workingDirectory: String
+	let elapsed: String
+	let listeningPorts: [Int]
+}
+
 @Observable
 @MainActor
 final class ProcessMonitor {
 	var listeners: [PortListener] = []
+	var developerProcesses: [DeveloperProcess] = []
 	var totalProcessCount = 0
 	var visibleProcessCount = 0
 	var showSystem = false
@@ -76,6 +89,7 @@ final class ProcessMonitor {
 			Self.snapshot(includeSystem: includeSystem)
 		}.value
 		listeners = snapshot.listeners
+		developerProcesses = snapshot.developerProcesses
 		totalProcessCount = snapshot.total
 		visibleProcessCount = snapshot.visible
 		error = snapshot.error
@@ -103,7 +117,29 @@ final class ProcessMonitor {
 		await refresh()
 	}
 
-	private nonisolated static func snapshot(includeSystem: Bool) -> (listeners: [PortListener], total: Int, visible: Int, error: String?) {
+	func terminate(_ process: DeveloperProcess) async {
+		guard process.pid > 1 else {
+			error = "This process cannot be terminated from Process Finder."
+			return
+		}
+		await terminate(pid: process.pid, name: process.process)
+	}
+
+	private func terminate(pid: Int, name: String) async {
+		let result = await Task.detached(priority: .userInitiated) {
+			if Darwin.kill(pid_t(pid), SIGTERM) == 0 { return nil as String? }
+			return String(cString: strerror(errno))
+		}.value
+
+		if let result {
+			error = "Could not terminate \(name) (PID \(pid)): \(result)"
+			return
+		}
+		try? await Task.sleep(for: .milliseconds(500))
+		await refresh()
+	}
+
+	private nonisolated static func snapshot(includeSystem: Bool) -> (listeners: [PortListener], developerProcesses: [DeveloperProcess], total: Int, visible: Int, error: String?) {
 		let uid = getuid()
 		let user = NSUserName()
 		let processes = run("/bin/ps", ["-axo", "pid=,uid=,comm="])
@@ -117,7 +153,7 @@ final class ProcessMonitor {
 
 		let lsof = run("/usr/sbin/lsof", ["-nP", "-iTCP", "-sTCP:LISTEN", "-FpcuPnT"])
 		guard lsof.status == 0 || !lsof.output.isEmpty else {
-			return ([], total, visible, "Could not inspect listening ports. \(lsof.output)")
+			return ([], [], total, visible, "Could not inspect listening ports. \(lsof.output)")
 		}
 
 		var result: [PortListener] = []
@@ -150,7 +186,96 @@ final class ProcessMonitor {
 		}
 
 		let unique = Dictionary(grouping: result, by: \.id).compactMap(\.value.first)
-		return (unique.sorted { ($0.port, $0.process) < ($1.port, $1.process) }, total, visible, nil)
+		let sortedListeners = unique.sorted { ($0.port, $0.process) < ($1.port, $1.process) }
+		let developerProcesses = developerProcessSnapshot(uid: uid, listeners: sortedListeners)
+		return (sortedListeners, developerProcesses, total, visible, nil)
+	}
+
+	private nonisolated static func developerProcessSnapshot(uid: UInt32, listeners: [PortListener]) -> [DeveloperProcess] {
+		let output = run("/bin/ps", ["-ww", "-axo", "pid=,ppid=,uid=,etime=,comm="]).output
+		let runtimes: Set<String> = [
+			"node", "bun", "deno", "python", "python3", "ruby", "java", "tsx", "ts-node",
+			"npm", "npx", "pnpm", "yarn", "php", "uvicorn", "gunicorn", "dotnet", "air",
+		]
+		let wrapperNames: Set<String> = ["npm", "npx", "pnpm", "yarn"]
+		let home = NSHomeDirectory()
+		let portsByPID = Dictionary(grouping: listeners, by: \.pid)
+		var candidates: [DeveloperProcess] = []
+
+		for line in output.split(separator: "\n") {
+			let pieces = line.split(maxSplits: 4, whereSeparator: \Character.isWhitespace)
+			guard pieces.count == 5,
+				let pid = Int(pieces[0]),
+				Int(pieces[1]) != nil,
+				UInt32(pieces[2]) == uid
+			else { continue }
+
+			let executable = String(pieces[4])
+			let name = URL(fileURLWithPath: executable).lastPathComponent
+			guard runtimes.contains(name) || executable.hasPrefix(home + "/") else { continue }
+			guard !isSystemCommand(executable), name != "ToolsUI", name != "ProcessFinder" else { continue }
+
+			let cwd = workingDirectory(for: pid)
+			let command = commandForPID(pid)
+			guard isDeveloperDirectory(cwd, home: home) || command.contains(home + "/Documents/") || command.contains(home + "/Projects/") else { continue }
+			let parent = parentDetails(for: pid)
+			guard !isDeveloperToolingNoise(name: name, command: command, parent: parent.1) else { continue }
+			let ports = Array(Set(portsByPID[pid, default: []].map(\.port))).sorted()
+			candidates.append(DeveloperProcess(
+				process: name,
+				pid: pid,
+				parentPID: parent.0,
+				parentProcess: parent.1,
+				command: command,
+				workingDirectory: cwd,
+				elapsed: String(pieces[3]),
+				listeningPorts: ports
+			))
+		}
+
+		let parentIDs = Set(candidates.map(\.parentPID))
+		return candidates
+			.filter {
+				let isWrapper = wrapperNames.contains($0.process) || isPackageManagerWrapper($0.command)
+				return !isWrapper || !parentIDs.contains($0.pid)
+			}
+			.sorted { ($0.process.lowercased(), $0.pid) < ($1.process.lowercased(), $1.pid) }
+	}
+
+	private nonisolated static func isPackageManagerWrapper(_ command: String) -> Bool {
+		let text = command.lowercased()
+		return text.contains("/yarn") || text.contains("/npm-cli.js") || text.contains("/pnpm")
+	}
+
+	private nonisolated static func isDeveloperToolingNoise(name: String, command: String, parent: String) -> Bool {
+		let text = "\(name) \(command) \(parent)".lowercased()
+		let markers = [
+			"/applications/chatgpt.app/",
+			"cua-repl",
+			"artifact-template-picker",
+			"trusted-worker.js",
+			"kernel.js --session-id",
+			"chrome-native-host",
+			"agent-device/dist/src/internal/daemon",
+			"rust-analyzer",
+			" --lsp",
+			"cursor helper (plugin)",
+		]
+		return markers.contains(where: text.contains)
+	}
+
+	private nonisolated static func workingDirectory(for pid: Int) -> String {
+		let output = run("/usr/sbin/lsof", ["-a", "-p", String(pid), "-d", "cwd", "-Fn"]).output
+		return output.split(separator: "\n")
+			.first { $0.first == "n" }
+			.map { String($0.dropFirst()) } ?? ""
+	}
+
+	private nonisolated static func isDeveloperDirectory(_ directory: String, home: String) -> Bool {
+		guard directory.hasPrefix(home + "/") else { return false }
+		let relative = directory.dropFirst(home.count + 1)
+		let excluded = ["Library/", "Applications/", ".local/", ".config/", ".cache/"]
+		return !excluded.contains { relative.hasPrefix($0) }
 	}
 
 	private nonisolated static func parseEndpoint(_ value: String) -> (address: String, port: Int)? {

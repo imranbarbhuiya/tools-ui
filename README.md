@@ -42,6 +42,9 @@ and classifies it as a local service, a known port forward, or a system process.
 System listeners are hidden by default and can be revealed from the window toolbar.
 Forwarded rows distinguish **Uses remote** (`kubectl port-forward`, SSH `-L`/`-D`)
 from **Publishes local** (Cloudflare Tunnel, ngrok, SSH `-R`, Tailscale Funnel/Serve).
+Switch to **Developer processes** to find likely project runtimes even when they do
+not listen on a port. System locations are excluded and package-manager wrappers
+are collapsed to keep the list focused.
 ## Use
 
 1. **Open Manager…** from the menu bar
