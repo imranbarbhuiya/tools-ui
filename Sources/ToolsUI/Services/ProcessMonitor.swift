@@ -149,7 +149,18 @@ final class ProcessMonitor {
 
 	private nonisolated static func commandForPID(_ pid: Int) -> String {
 		guard pid > 0 else { return "" }
-		return run("/bin/ps", ["-p", String(pid), "-o", "command="]).output.trimmingCharacters(in: .whitespacesAndNewlines)
+		let command = run("/bin/ps", ["-p", String(pid), "-o", "command="])
+			.output.trimmingCharacters(in: .whitespacesAndNewlines)
+		let executable = run("/bin/ps", ["-ww", "-p", String(pid), "-o", "comm="])
+			.output.trimmingCharacters(in: .whitespacesAndNewlines)
+		guard !executable.isEmpty else { return command }
+
+		let name = URL(fileURLWithPath: executable).lastPathComponent
+		if command == executable { return name }
+		if command.hasPrefix(executable + " ") {
+			return name + command.dropFirst(executable.count)
+		}
+		return command
 	}
 
 	private nonisolated static func run(_ executable: String, _ arguments: [String]) -> (status: Int32, output: String) {
