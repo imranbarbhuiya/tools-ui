@@ -20,7 +20,7 @@ struct ProcessMonitorView: View {
 	}
 
 	private var uniquePortCount: Int { Set(monitor.displayedListeners.map(\.port)).count }
-	private var forwardedPortCount: Int { Set(monitor.listeners.filter { $0.kind == .forwarded }.map(\.port)).count }
+	private var forwardedPortCount: Int { Set(monitor.listeners.filter { $0.kind.isForwarded }.map(\.port)).count }
 
 	var body: some View {
 		VStack(spacing: 0) {
@@ -102,7 +102,7 @@ struct ProcessMonitorView: View {
 					.help(row.parentProcess.isEmpty ? "PID \(row.pid)" : "Started by \(row.parentProcess) (PID \(row.parentPID))")
 				}
 			}.width(min: 160, ideal: 240)
-			TableColumn("Type") { row in KindBadge(kind: row.kind) }.width(min: 105, ideal: 120)
+			TableColumn("Direction") { row in KindBadge(kind: row.kind) }.width(min: 120, ideal: 145)
 			TableColumn("Listening on") { row in Text(row.endpoint).font(.callout.monospaced()).textSelection(.enabled) }.width(min: 140, ideal: 190)
 			TableColumn("Started with") { row in CommandCell(command: row.command) }
 			TableColumn("") { row in
@@ -149,12 +149,21 @@ private struct Metric: View {
 
 private struct KindBadge: View {
 	let kind: ListenerKind
-	private var color: Color { switch kind { case .local: .blue; case .forwarded: .orange; case .system: .secondary } }
+	private var color: Color {
+		switch kind {
+		case .local: .blue
+		case .usesRemote: .teal
+		case .publishesLocal: .orange
+		case .forwarded: .yellow
+		case .system: .secondary
+		}
+	}
 	var body: some View {
 		Label(kind.rawValue, systemImage: kind.symbol)
 			.font(.caption.weight(.semibold)).foregroundStyle(color)
 			.padding(.horizontal, 8).padding(.vertical, 4)
 			.background(color.opacity(0.12), in: Capsule())
+			.help(kind.explanation)
 	}
 }
 

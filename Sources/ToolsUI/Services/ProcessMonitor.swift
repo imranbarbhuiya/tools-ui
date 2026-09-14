@@ -4,14 +4,35 @@ import Darwin
 
 enum ListenerKind: String, Sendable {
 	case local = "Local"
+	case usesRemote = "Uses remote"
+	case publishesLocal = "Publishes local"
 	case forwarded = "Forwarded"
 	case system = "System"
+
+	var isForwarded: Bool {
+		switch self {
+		case .usesRemote, .publishesLocal, .forwarded: true
+		case .local, .system: false
+		}
+	}
 
 	var symbol: String {
 		switch self {
 		case .local: "laptopcomputer"
+		case .usesRemote: "arrow.down.to.line.compact"
+		case .publishesLocal: "arrow.up.to.line.compact"
 		case .forwarded: "arrow.left.arrow.right"
 		case .system: "gearshape.2"
+		}
+	}
+
+	var explanation: String {
+		switch self {
+		case .local: "A process listening directly on this Mac"
+		case .usesRemote: "Makes a remote service available on this Mac"
+		case .publishesLocal: "Exposes a service from this Mac through a tunnel"
+		case .forwarded: "Forwarded, but the direction is ambiguous"
+		case .system: "A macOS or other-user listener"
 		}
 	}
 }
@@ -142,8 +163,15 @@ final class ProcessMonitor {
 
 	private nonisolated static func classify(process: String, command: String, ownerUID: UInt32, currentUID: UInt32) -> ListenerKind {
 		let text = "\(process) \(command)".lowercased()
-		let forwarders = ["ssh", "kubectl port-forward", "cloudflared", "ngrok", "tailscale", "portless", "frpc", "socat"]
-		if forwarders.contains(where: text.contains) { return .forwarded }
+		if text.contains("kubectl port-forward") { return .usesRemote }
+		if text.contains("ssh"), text.contains(" -l") || text.contains(" -d") { return .usesRemote }
+		if text.contains("ssh"), text.contains(" -r") { return .publishesLocal }
+
+		let publishers = ["cloudflared", "ngrok", "frpc", "tailscale funnel", "tailscale serve"]
+		if publishers.contains(where: text.contains) { return .publishesLocal }
+
+		let ambiguousForwarders = ["ssh", "portless", "socat"]
+		if ambiguousForwarders.contains(where: text.contains) { return .forwarded }
 		return ownerUID == currentUID && !isSystemCommand(command) ? .local : .system
 	}
 
