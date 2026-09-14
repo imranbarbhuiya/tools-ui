@@ -6,6 +6,7 @@ struct ProcessMonitorView: View {
 		case ports = "Listening ports"
 		case processes = "Developer processes"
 		var id: Self { self }
+		var switchLabel: String { self == .ports ? "Ports" : "Processes" }
 	}
 
 	@Bindable var monitor: ProcessMonitor
@@ -97,12 +98,15 @@ struct ProcessMonitorView: View {
 			Text("This sends SIGTERM to the process started with:\n\(process.command)")
 		}
 		.toolbar {
-			ToolbarItemGroup {
+			ToolbarItem(placement: .principal) {
 				Picker("View", selection: $section) {
-					ForEach(Section.allCases) { section in Text(section.rawValue).tag(section) }
+					ForEach(Section.allCases) { section in Text(section.switchLabel).tag(section) }
 				}
 				.pickerStyle(.segmented)
-				.frame(width: 270)
+				.frame(width: 220)
+				.animation(nil, value: section)
+			}
+			ToolbarItemGroup(placement: .primaryAction) {
 				Toggle(isOn: $monitor.showSystem) { Label("System processes", systemImage: "gearshape.2") }
 					.disabled(section == .processes)
 				Button { Task { await monitor.refresh() } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
