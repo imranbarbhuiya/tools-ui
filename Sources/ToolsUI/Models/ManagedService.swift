@@ -94,6 +94,13 @@ struct ManagedService: Identifiable, Codable, Equatable, Hashable {
 
 	var isDocker: Bool { kind == .docker }
 
+	var projectDirectory: String {
+		if !workingDirectory.isEmpty { return workingDirectory }
+		if !docker.run.buildContext.isEmpty { return docker.run.buildContext }
+		if !docker.composeFile.isEmpty { return URL(fileURLWithPath: docker.composeFile).deletingLastPathComponent().path }
+		return ""
+	}
+
 	/// The container this service drives, whichever way it is backed.
 	var containerName: String {
 		switch docker.kind {

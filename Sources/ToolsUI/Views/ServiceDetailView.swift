@@ -24,6 +24,7 @@ struct ServiceDetailView: View {
 			VStack(alignment: .leading, spacing: 22) {
 				header
 				actionBar
+				runtimeCard
 				if !dependencies.isEmpty || !dependents.isEmpty { dependencyCard }
 				configurationCard
 				environmentCard
@@ -60,7 +61,7 @@ struct ServiceDetailView: View {
 					if !url.isEmpty {
 						Button("Open URL", systemImage: "safari") { store.openURL(service.id) }
 					}
-					if !service.workingDirectory.isEmpty {
+					if !service.projectDirectory.isEmpty {
 						Button("Reveal in Finder", systemImage: "folder") { store.openFolder(service.id) }
 					}
 					Button("Full Log…", systemImage: "doc.plaintext") { onShowLog() }
@@ -157,7 +158,7 @@ struct ServiceDetailView: View {
 				.controlSize(.large)
 			}
 
-			if !service.workingDirectory.isEmpty {
+			if !service.projectDirectory.isEmpty {
 				Button {
 					store.openFolder(service.id)
 				} label: {
@@ -244,7 +245,7 @@ struct ServiceDetailView: View {
 					divider
 					MetaRow(
 						title: "Directory",
-						value: service.workingDirectory.isEmpty ? "—" : service.workingDirectory,
+						value: service.projectDirectory.isEmpty ? "—" : service.workingDirectory,
 						mono: true
 					)
 				}
@@ -316,31 +317,40 @@ struct ServiceDetailView: View {
 		}
 	}
 
+	private var runtimeCard: some View {
+		InsetCard(title: "Checkout & resources") {
+			VStack(alignment: .leading, spacing: 10) {
+				if let checkout = store.runtime.checkout(for: service.projectDirectory) {
+					HStack {
+						Label(checkout.label, systemImage: "arrow.triangle.branch").font(.callout.weight(.medium))
+						if checkout.isLinked { Text("Worktree").font(.caption).foregroundStyle(.blue) }
+						Spacer()
+						if checkout.changedFiles > 0 { Text("\(checkout.changedFiles) changed").font(.caption).foregroundStyle(.orange) }
+					}
+					Text(checkout.directory).font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
+				}
+				if let usage = store.runtime.usage(for: service) {
+					UsageLabel(usage: usage)
+					Text(service.isDocker ? "Live container resources" : "Process tree · \(usage.processCount) processes")
+						.font(.caption2).foregroundStyle(.tertiary)
+				} else { Text(status.isUp ? "Waiting for a resource sample…" : "Resources appear when the service is running.").font(.caption).foregroundStyle(.secondary) }
+				if !url.isEmpty {
+					Divider()
+					HStack {
+						URLActions(value: url, showURL: true)
+						if let route = store.runtime.route(for: service) { Text("Live · port \(route.route.port)").font(.caption2).foregroundStyle(.green) }
+					}
+				}
+				if case let .failed(message) = status.state { Label(message, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.red).textSelection(.enabled) }
+			}
+		}
+	}
+
 	private var logCard: some View {
 		InsetCard(title: "Output") {
-			VStack(alignment: .leading, spacing: 10) {
-				ScrollView {
-					Text(status.log.isEmpty ? "No output yet. Start the service to stream logs here." : status.log)
-						.font(.system(.caption, design: .monospaced))
-						.foregroundStyle(status.log.isEmpty ? .tertiary : .primary)
-						.frame(maxWidth: .infinity, alignment: .leading)
-						.textSelection(.enabled)
-				}
-				.frame(minHeight: 180, maxHeight: 300)
-				.padding(10)
-				.background {
-					RoundedRectangle(cornerRadius: 8, style: .continuous)
-						.fill(Color.primary.opacity(0.04))
-				}
-
-				HStack {
-					Button("Full log", systemImage: "arrow.up.left.and.arrow.down.right", action: onShowLog)
-						.controlSize(.small)
-					Spacer()
-					Button("Clear", systemImage: "trash") { store.clearLog(service.id) }
-						.controlSize(.small)
-						.disabled(status.log.isEmpty)
-				}
+			VStack(alignment: .leading, spacing: 8) {
+				LogTimelineView(store: store, serviceID: service.id, compact: true).frame(height: 300)
+				Button("Full log", systemImage: "arrow.up.left.and.arrow.down.right", action: onShowLog).controlSize(.small)
 			}
 		}
 	}

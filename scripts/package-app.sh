@@ -3,11 +3,17 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-swift build -c release --disable-sandbox
+INSTALL=true
+if [[ "${1:-}" == "--no-install" ]]; then INSTALL=false
+elif [[ $# -gt 0 ]]; then echo "Usage: $0 [--no-install]" >&2; exit 2; fi
+export CLANG_MODULE_CACHE_PATH="$ROOT/.cache/clang"
+export SWIFTPM_MODULECACHE_OVERRIDE="$ROOT/.cache/clang"
+swift build -c release --disable-sandbox --cache-path "$ROOT/.cache"
+BIN_DIR="$(swift build -c release --disable-sandbox --cache-path "$ROOT/.cache" --show-bin-path)"
 
 APP_NAME="Tools UI.app"
 APP="$ROOT/$APP_NAME"
-BIN="$ROOT/.build/release/ToolsUI"
+BIN="$BIN_DIR/ToolsUI"
 ICON_ICNS="$ROOT/Resources/AppIcon.icns"
 ICON_PNG="$ROOT/Resources/AppIcon-256.png"
 if [[ ! -f "$ICON_PNG" && -f "$ROOT/Resources/AppIcon.iconset/icon_256x256.png" ]]; then
@@ -37,9 +43,9 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0.0</string>
+	<string>1.1.0</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>2</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
 	<key>NSHighResolutionCapable</key>
@@ -52,12 +58,20 @@ PLIST
 
 cp "$BIN" "$APP/Contents/MacOS/ToolsUI"
 chmod +x "$APP/Contents/MacOS/ToolsUI"
+cp -R "$BIN_DIR/ToolsUI_ToolsUI.bundle" "$APP/Contents/Resources/"
 
 if [[ -f "$ICON_ICNS" ]]; then
 	cp "$ICON_ICNS" "$APP/Contents/Resources/AppIcon.icns"
 fi
 if [[ -f "$ICON_PNG" ]]; then
 	cp "$ICON_PNG" "$APP/Contents/Resources/AppIcon-256.png"
+fi
+
+codesign --force --deep --sign - "$APP"
+
+if [[ "$INSTALL" == false ]]; then
+	echo "Built: $APP"
+	exit 0
 fi
 
 rm -rf "$ROOT/ToolsUI.app" 2>/dev/null || true

@@ -23,6 +23,7 @@ struct ProcessMonitorView: View {
 		return monitor.displayedListeners.filter {
 			$0.process.localizedCaseInsensitiveContains(query)
 				|| $0.command.localizedCaseInsensitiveContains(query)
+				|| $0.workingDirectory.localizedCaseInsensitiveContains(query)
 				|| $0.parentProcess.localizedCaseInsensitiveContains(query)
 				|| String($0.port).contains(query)
 				|| $0.kind.rawValue.localizedCaseInsensitiveContains(query)
@@ -129,7 +130,7 @@ struct ProcessMonitorView: View {
 				Metric(value: forwardedPortCount, label: "Forwarded", color: .orange)
 			} else {
 				Metric(value: monitor.developerProcesses.count, label: "Detected", color: .blue)
-				Metric(value: monitor.developerProcesses.filter { $0.listeningPorts.isEmpty }.count, label: "Portless", color: .orange)
+				Metric(value: monitor.developerProcesses.filter { $0.listeningPorts.isEmpty }.count, label: "No port", color: .orange)
 			}
 			Metric(value: monitor.visibleProcessCount, label: "Your processes", color: .green)
 			if monitor.showSystem { Metric(value: monitor.totalProcessCount, label: "All processes", color: .secondary) }
@@ -158,6 +159,13 @@ struct ProcessMonitorView: View {
 			}.width(min: 160, ideal: 240)
 			TableColumn("Direction") { row in KindBadge(kind: row.kind) }.width(min: 120, ideal: 145)
 			TableColumn("Listening on") { row in Text(row.endpoint).font(.callout.monospaced()).textSelection(.enabled) }.width(min: 140, ideal: 190)
+			TableColumn("Project folder") { row in
+				VStack(alignment: .leading, spacing: 2) {
+					Text(row.workingDirectory.isEmpty ? "Unknown" : URL(fileURLWithPath: row.workingDirectory).lastPathComponent)
+						.fontWeight(.medium)
+					CommandCell(command: row.workingDirectory)
+				}
+			}.width(min: 150, ideal: 220)
 			TableColumn("Started with") { row in CommandCell(command: row.command) }
 			TableColumn("") { row in
 				if row.kind != .system {
@@ -176,6 +184,9 @@ struct ProcessMonitorView: View {
 			if let id = ids.first, let row = rows.first(where: { $0.id == id }) {
 				Button("Copy port") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(String(row.port), forType: .string) }
 				Button("Copy command") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(row.command, forType: .string) }
+				if !row.workingDirectory.isEmpty {
+					Button("Copy project folder") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(row.workingDirectory, forType: .string) }
+				}
 				if row.kind != .system {
 					Divider()
 					Button("Terminate process…", systemImage: "stop.circle", role: .destructive) { pendingTermination = row }

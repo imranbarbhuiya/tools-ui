@@ -13,6 +13,9 @@ let package = Package(
 		.executableTarget(
 			name: "ToolsUI",
 			path: "Sources/ToolsUI",
+			exclude: ["AppIcon.png"],
+			resources: [.copy("Resources/neural-logline.js"), .copy("Resources/NOTICE-neural-logline.txt")],
 		),
+		.testTarget(name: "ToolsUITests", dependencies: ["ToolsUI"]),
 	],
 )

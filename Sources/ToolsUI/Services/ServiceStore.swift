@@ -16,6 +16,12 @@ final class ServiceStore {
 	var services: [ManagedService] = []
 	var statuses: [UUID: ServiceStatus] = [:]
 	var lastError: String?
+	let runtime = RuntimeMonitor()
+	let logs = LogStore()
+	private var generations: [UUID: UUID] = [:]
+	private var startGenerations: [UUID: UUID] = [:]
+	private var logGenerations: [UUID: UUID] = [:]
+	private var registeredAliases: [UUID: PortlessRoute] = [:]
 
 	var portless: Portless.Probe?
 	var dockerAvailability: DockerAvailability?
@@ -32,24 +38,23 @@ final class ServiceStore {
 	private var stoppingIDs: Set<UUID> = []
 	private let saveURL: URL
 
-	init() {
-		let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-			.appendingPathComponent("ToolsUI", isDirectory: true)
-		try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-		saveURL = dir.appendingPathComponent("services.json")
+	init(configURL: URL? = nil, startAutomatically: Bool = true) {
+		let environment = ProcessInfo.processInfo.environment
+		let custom = configURL ?? environment["TOOLSUI_CONFIG_PATH"].map { URL(fileURLWithPath: $0) }
+		saveURL = custom ?? FileManager.default.homeDirectoryForCurrentUser
+			.appendingPathComponent("Library/Application Support/ToolsUI/services.json")
+		try? FileManager.default.createDirectory(at: saveURL.deletingLastPathComponent(), withIntermediateDirectories: true)
 		load()
-		if services.isEmpty {
-			services = Self.seed
-			save()
-		} else if adoptNewSeeds() {
-			save()
+		if custom == nil {
+			if services.isEmpty { services = Self.seed; save() }
+			else if adoptNewSeeds() { save() }
 		}
-		for service in services {
-			statuses[service.id] = ServiceStatus()
-		}
-		Task { [weak self] in
-			await self?.refreshAll()
-			await self?.startAutoStartServices()
+		for service in services { statuses[service.id] = ServiceStatus() }
+		if startAutomatically {
+			Task { [weak self] in
+				await self?.refreshAll()
+				if environment["TOOLSUI_NO_AUTOSTART"] != "1" { await self?.startAutoStartServices() }
+			}
 		}
 	}
 
@@ -98,7 +103,8 @@ final class ServiceStore {
 	}
 
 	func effectiveURL(for service: ManagedService) -> String {
-		service.effectiveURL(proxy: portless)
+		guard service.usesPortless else { return service.url.trimmingCharacters(in: .whitespacesAndNewlines) }
+		return runtime.route(for: service)?.url ?? runtime.expectedURLs[service.id] ?? ""
 	}
 
 	// MARK: - Refresh
@@ -107,13 +113,32 @@ final class ServiceStore {
 		async let probe = Portless.probe()
 		await refreshDocker()
 		portless = await probe
+		await refreshRuntime()
 	}
 
 	func refreshPortless() async {
 		portless = await Portless.probe()
+		await refreshRuntime()
+	}
+
+	func refreshRuntime() async {
+		let containers = Dictionary(uniqueKeysWithValues: dockerServices.compactMap { service -> (UUID, String)? in
+			guard let container = container(for: service), container.isRunning else { return nil }
+			return (service.id, container.name)
+		})
+		await runtime.refresh(services: services, statuses: statuses, containers: containers)
+		runtime.bind(statuses: statuses)
+	}
+
+	func resolveURL(for service: ManagedService) async -> String {
+		guard service.usesPortless else { return service.url }
+		let result = await Shell.run("portless get \(Shell.quote(service.resolvedPortlessName))\(service.isDocker ? " --no-worktree" : "")", cwd: service.projectDirectory, timeout: 5)
+		guard result.isSuccess, let url = URL(string: result.trimmed), ["http", "https"].contains(url.scheme) else { return "" }
+		return result.trimmed
 	}
 
 	func refreshDocker() async {
+		guard !isRefreshingDocker else { return }
 		if dockerAvailability == nil || dockerAvailability == .daemonDown {
 			dockerAvailability = await Docker.availability()
 		}
@@ -141,6 +166,7 @@ final class ServiceStore {
 				continue
 			}
 			if container.isRunning {
+				if !logStreamers.isRunning(id: service.id) { attachDockerLogs(service) }
 				if !current.isUp {
 					current.state = .running(pid: 0)
 					current.startedAt = current.startedAt ?? Date()
@@ -176,7 +202,9 @@ final class ServiceStore {
 			context.portsByContainerPort = map
 			context.primaryPort = map.values.min()
 		} else {
-			if service.readiness.port > 0 {
+			if service.usesPortless, let route = runtime.route(for: service) {
+				context.primaryPort = route.route.port
+			} else if service.readiness.port > 0 {
 				context.primaryPort = service.readiness.port
 			} else if let port = URLComponents(string: service.url)?.port {
 				context.primaryPort = port
@@ -250,6 +278,7 @@ final class ServiceStore {
 
 	func add(_ service: ManagedService) {
 		services.append(service)
+		runtime.invalidate()
 		statuses[service.id] = ServiceStatus()
 		save()
 	}
@@ -257,6 +286,8 @@ final class ServiceStore {
 	func update(_ service: ManagedService) {
 		guard let index = services.firstIndex(where: { $0.id == service.id }) else { return }
 		services[index] = service
+		runtime.expectedURLs[service.id] = nil
+		runtime.invalidate()
 		save()
 	}
 
@@ -267,6 +298,8 @@ final class ServiceStore {
 		}
 		services.removeAll { $0.id == id }
 		statuses[id] = nil
+		logs.clear(id)
+		runtime.invalidate()
 		save()
 	}
 
@@ -403,10 +436,12 @@ final class ServiceStore {
 	// MARK: - Start / stop
 
 	func start(_ id: UUID) {
-		guard startTasks[id] == nil else { return }
+		guard startTasks[id] == nil, !status(for: id).isRunning else { return }
+		let generation = UUID()
+		startGenerations[id] = generation
 		startTasks[id] = Task { [weak self] in
 			await self?.performStart(id)
-			self?.startTasks[id] = nil
+			if self?.startGenerations[id] == generation { self?.startTasks[id] = nil; self?.startGenerations[id] = nil }
 		}
 	}
 
@@ -414,18 +449,28 @@ final class ServiceStore {
 		guard let service = find(id) else { return }
 		if status(for: id).isUp { return }
 		lastError = nil
+		let required = DependencyGraph.reachable(from: id, in: services).union([id])
+		let missing = services.filter { required.contains($0.id) }.flatMap(\.dependencies).filter { find($0) == nil }
+		if !missing.isEmpty || !DependencyGraph.cyclic(in: services).isDisjoint(with: required) {
+			let message = missing.isEmpty ? "Dependency cycle; edit the dependency list" : "A required service is missing; edit the dependency list"
+			setState(id, .failed(message))
+			appendLog(id, message + "\n", level: .error)
+			lastError = "\(service.name): \(message)"
+			return
+		}
+		await refreshRuntime()
 
 		for dependencyID in DependencyGraph.startOrder(for: id, in: services) {
 			if Task.isCancelled { return }
 			guard let dependency = find(dependencyID) else { continue }
-			if status(for: dependencyID).isUp, await isActuallyUp(dependency) { continue }
-
 			setState(id, .waitingForDependencies(dependency.name))
 			appendLog(id, "→ waiting for dependency \(dependency.name)\n")
-			await launch(dependencyID)
+			if !status(for: dependencyID).isRunning { await launch(dependencyID) }
 
 			guard await waitUntilReady(dependencyID) else {
-				let message = "\(dependency.name) never became ready"
+				if Task.isCancelled { return }
+				let message = "Dependency \(dependency.name): \(readinessFailure(for: dependency))"
+				appendLog(id, message + "\n", level: .error)
 				setState(id, .failed(message))
 				lastError = "\(service.name): \(message)"
 				return
@@ -433,7 +478,22 @@ final class ServiceStore {
 		}
 
 		if Task.isCancelled { return }
+		await refreshRuntime()
+		for candidate in DependencyGraph.startOrder(for: id, in: services).compactMap(find) + [service] where candidate.usesPortless {
+			let url = await resolveURL(for: candidate)
+			if !url.isEmpty { runtime.expectedURLs[candidate.id] = url }
+		}
+		if Task.isCancelled { return }
 		await launch(id)
+		if resolveMode(for: service) != .immediate {
+			if !(await waitUntilReady(id)), !Task.isCancelled {
+				let message = readinessFailure(for: service)
+				appendLog(id, message + "\n", level: .error)
+				stop(id)
+				setState(id, .failed(message))
+				lastError = "\(service.name): \(message)"
+			}
+		}
 	}
 
 	private func isActuallyUp(_ service: ManagedService) async -> Bool {
@@ -445,6 +505,8 @@ final class ServiceStore {
 
 	private func launch(_ id: UUID) async {
 		guard let service = find(id) else { return }
+		generations[id] = UUID()
+		logs.finish(id)
 		setState(id, .starting)
 		var current = status(for: id)
 		current.startedAt = Date()
@@ -460,10 +522,13 @@ final class ServiceStore {
 	private func launchProcess(_ service: ManagedService) {
 		let environment = resolvedEnvironment(for: service)
 		let id = service.id
+		let generation = generations[id]
+		appendLog(id, "$ \(service.launchCommand)\n")
 
 		runners.start(service: service, environment: environment) { [weak self] event in
 			Task { @MainActor in
-				self?.handle(event, for: id)
+				guard let self, self.generations[id] == generation, self.find(id) != nil else { return }
+				self.handle(event, for: id)
 			}
 		}
 
@@ -514,6 +579,11 @@ final class ServiceStore {
 		}
 
 		appendLog(id, result.output)
+		if Task.isCancelled {
+			if service.docker.kind == .compose { _ = await Docker.composeDown(file: service.docker.composeFile, service: service.docker.composeService) }
+			else { _ = await Docker.stop(name) }
+			return
+		}
 		guard result.isSuccess else {
 			setState(id, .failed("docker exit \(result.status)"))
 			lastError = "\(service.name): docker failed — \(result.trimmed.suffix(200))"
@@ -542,6 +612,7 @@ final class ServiceStore {
 			Task { @MainActor in self?.appendLog(id, chunk) }
 		}
 		guard prepared.isSuccess else { return prepared }
+		if Task.isCancelled { return Shell.Result(status: 130, output: "Launch cancelled\n") }
 
 		let command = Docker.buildRunCommand(spec)
 		appendLog(id, "$ \(command)\n")
@@ -552,14 +623,20 @@ final class ServiceStore {
 
 	private func attachDockerLogs(_ service: ManagedService) {
 		let id = service.id
-		let name = service.containerName
+		let name = container(for: service)?.name ?? service.containerName
 		guard !name.isEmpty else { return }
+		logs.finish(id)
+		let generation = UUID()
+		logGenerations[id] = generation
 		logStreamers.run(
 			id: id,
 			command: "exec docker logs -f --tail 200 \(Shell.quote(name))"
 		) { [weak self] event in
-			guard case let .output(text) = event else { return }
-			Task { @MainActor in self?.appendLog(id, text) }
+			guard case let .output(text, stream) = event else { return }
+			Task { @MainActor in
+				guard let self, self.logGenerations[id] == generation, self.find(id) != nil else { return }
+				self.appendLog(id, text, stream: stream)
+			}
 		}
 	}
 
@@ -571,7 +648,13 @@ final class ServiceStore {
 		}
 
 		await ensureProxyRunning(for: service)
+		let url = await resolveURL(for: service)
+		let hostname = URL(string: url)?.host ?? ""
+		let existed = Portless.registeredRoutes().contains { $0.hostname == hostname }
 		let result = await Portless.registerAlias(name: service.resolvedPortlessName, port: port)
+		if result.isSuccess, !existed, let route = Portless.registeredRoutes().first(where: { $0.hostname == hostname && $0.isAlias && $0.port == port }) {
+			registeredAliases[service.id] = route
+		}
 		appendLog(service.id, result.output)
 		if !result.isSuccess {
 			lastError = "\(service.name): portless alias failed — \(result.trimmed.suffix(160))"
@@ -618,10 +701,11 @@ final class ServiceStore {
 
 		switch resolveMode(for: service) {
 		case .immediate:
-			return true
+			guard !Task.isCancelled else { return false }
+			return await isActuallyUp(service)
 
 		case .dockerHealth:
-			while Date() < deadline {
+			while Date() < deadline, !Task.isCancelled {
 				await refreshDocker()
 				if let container = container(for: service) {
 					if container.isHealthy { return true }
@@ -633,19 +717,27 @@ final class ServiceStore {
 			return false
 
 		case .tcpPort:
-			let port = readinessPort(for: service)
-			guard let port, port > 0 else { return true }
-			while Date() < deadline {
-				if Shell.canConnect(port: UInt16(clamping: port), timeout: 0.6) { return true }
+			if service.usesPortless {
+				let url = await resolveURL(for: service)
+				if !url.isEmpty { runtime.expectedURLs[id] = url }
+			}
+			while Date() < deadline, !Task.isCancelled {
+				if !(await isActuallyUp(service)) { return false }
+				if let port = readinessPort(for: service), (1...65535).contains(port) {
+					if Shell.canConnect(port: UInt16(port), timeout: 0.6) { return true }
+				} else if !service.usesPortless { return false }
 				try? await Task.sleep(for: .milliseconds(500))
 			}
 			return false
 
 		case .http:
-			let target = check.url.isEmpty ? effectiveURL(for: service) : check.url
-			guard let url = URL(string: target), !target.isEmpty else { return true }
-			while Date() < deadline {
-				if await probeHTTP(url) { return true }
+			let target = check.url.isEmpty ? (service.usesPortless ? await resolveURL(for: service) : effectiveURL(for: service)) : check.url
+			guard let url = URL(string: target), ["http", "https"].contains(url.scheme) else { return false }
+			while Date() < deadline, !Task.isCancelled {
+				if !(await isActuallyUp(service)) { return false }
+				if await probeHTTP(url, portless: service.usesPortless && check.url.isEmpty) {
+					return !Task.isCancelled ? await isActuallyUp(service) : false
+				}
 				try? await Task.sleep(for: .milliseconds(700))
 			}
 			return false
@@ -662,16 +754,41 @@ final class ServiceStore {
 			if container(for: service)?.hasHealthcheck == true { return .dockerHealth }
 			return routedHostPort(for: service) != nil ? .tcpPort : .dockerHealth
 		}
+		if service.usesPortless { return .http }
 		return service.readiness.port > 0 ? .tcpPort : .immediate
 	}
 
 	private func readinessPort(for service: ManagedService) -> Int? {
+		if service.usesPortless {
+			guard let host = URL(string: runtime.expectedURLs[service.id] ?? "")?.host else { return nil }
+			return Portless.registeredRoutes().first { $0.hostname == host }?.port
+		}
 		if service.readiness.port > 0 { return service.readiness.port }
 		if service.isDocker { return routedHostPort(for: service) }
 		return URLComponents(string: service.url)?.port
 	}
 
-	private func probeHTTP(_ url: URL) async -> Bool {
+	private func readinessFailure(for service: ManagedService) -> String {
+		if case let .failed(message) = status(for: service.id).state { return message }
+		if !status(for: service.id).isRunning { return "exited before becoming ready; inspect its log" }
+		let target: String = switch resolveMode(for: service) {
+		case .tcpPort: "TCP port \(readinessPort(for: service).map(String.init) ?? "missing")"
+		case .http: service.readiness.url.isEmpty ? effectiveURL(for: service) : service.readiness.url
+		case .dockerHealth: "container health check"
+		default: "process startup"
+		}
+		return "timed out after \(Int(max(5, service.readiness.timeout)))s waiting for \(target.isEmpty ? "a configured URL" : target)"
+	}
+
+	private func probeHTTP(_ url: URL, portless: Bool = false) async -> Bool {
+		if portless, let host = url.host {
+			let port = url.port ?? (url.scheme == "https" ? 443 : 80)
+			// Foundation does not consistently resolve wildcard localhost domains.
+			// curl preserves the hostname for routing, SNI and certificate validation.
+			let result = await Shell.run("/usr/bin/curl --noproxy '*' --silent --output /dev/null --write-out '%{http_code}' --max-time 3 --resolve \(Shell.quote("\(host):\(port):127.0.0.1")) \(Shell.quote(url.absoluteString))", timeout: 4)
+			guard result.isSuccess, let code = Int(result.trimmed) else { return false }
+			return (200..<500).contains(code)
+		}
 		var request = URLRequest(url: url)
 		request.timeoutInterval = 3
 		request.httpMethod = "GET"
@@ -685,6 +802,10 @@ final class ServiceStore {
 	func stop(_ id: UUID) {
 		startTasks[id]?.cancel()
 		startTasks[id] = nil
+		generations[id] = nil
+		startGenerations[id] = nil
+		logGenerations[id] = nil
+		logs.finish(id)
 
 		guard let service = find(id) else { return }
 		var current = status(for: id)
@@ -693,13 +814,14 @@ final class ServiceStore {
 		statuses[id] = current
 
 		if service.isDocker {
+			let alias = registeredAliases.removeValue(forKey: id)
 			logStreamers.stop(id: id)
 			stoppingIDs.insert(id)
 			Task { [weak self] in
 				guard let self else { return }
 				defer { stoppingIDs.remove(id) }
-				if service.usesPortless {
-					await Portless.removeAlias(name: service.resolvedPortlessName)
+				if let alias, Portless.registeredRoutes().contains(alias) {
+					await Portless.removeAlias(name: alias.hostname)
 				}
 				let result: Shell.Result = if service.docker.kind == .compose {
 					await Docker.composeDown(file: service.docker.composeFile, service: service.docker.composeService)
@@ -746,6 +868,9 @@ final class ServiceStore {
 	func shutdown() {
 		for task in startTasks.values { task.cancel() }
 		startTasks.removeAll()
+		generations.removeAll()
+		startGenerations.removeAll()
+		logGenerations.removeAll()
 		logStreamers.stopAll()
 		runners.stopAll()
 	}
@@ -780,12 +905,13 @@ final class ServiceStore {
 
 	func openFolder(_ id: UUID) {
 		guard let service = find(id) else { return }
-		let path = service.workingDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
+		let path = service.projectDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
 		guard !path.isEmpty else { return }
 		NSWorkspace.shared.open(URL(fileURLWithPath: path, isDirectory: true))
 	}
 
 	func clearLog(_ id: UUID) {
+		logs.clear(id)
 		var current = status(for: id)
 		current.log = ""
 		statuses[id] = current
@@ -799,8 +925,9 @@ final class ServiceStore {
 		statuses[id] = current
 	}
 
-	private func appendLog(_ id: UUID, _ chunk: String) {
-		guard !chunk.isEmpty else { return }
+	private func appendLog(_ id: UUID, _ chunk: String, stream: LogStream = .system, level: LogLevel? = nil) {
+		guard !chunk.isEmpty, find(id) != nil else { return }
+		logs.append(chunk, serviceID: id, stream: stream, level: level)
 		var current = status(for: id)
 		let next = current.log.isEmpty ? chunk : current.log + chunk
 		current.log = next.count > 40_000 ? String(next.suffix(30_000)) : next
@@ -813,10 +940,12 @@ final class ServiceStore {
 		case let .started(pid):
 			current.state = .running(pid: pid)
 			current.startedAt = Date()
-		case let .output(chunk):
-			let next = current.log.isEmpty ? chunk : current.log + chunk
-			current.log = next.count > 40_000 ? String(next.suffix(30_000)) : next
+		case let .output(chunk, stream):
+			appendLog(id, chunk, stream: stream)
+			return
 		case let .exited(code):
+			logs.finish(id)
+			logs.append("Process exited \(code)", serviceID: id, level: code == 0 ? .info : .error)
 			if case .stopped = current.state { break }
 			if code == 0 {
 				current.state = .stopped
@@ -826,6 +955,8 @@ final class ServiceStore {
 			}
 			current.startedAt = nil
 		case let .failed(message):
+			logs.finish(id)
+			logs.append(message, serviceID: id, level: .error)
 			current.state = .failed(message)
 			current.startedAt = nil
 			lastError = message

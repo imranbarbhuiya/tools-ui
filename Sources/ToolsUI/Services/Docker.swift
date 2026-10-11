@@ -270,3 +270,37 @@ enum Docker {
 		return parts.joined(separator: " ")
 	}
 }
+
+
+extension Docker {
+	static func resourceUsage(containers: [UUID: String]) async -> [UUID: ResourceUsage] {
+		guard !containers.isEmpty else { return [:] }
+		let names = Set(containers.values).sorted().map(Shell.quote).joined(separator: " ")
+		let result = await Shell.run("docker stats --no-stream --format '{{json .}}' \(names)", timeout: 8)
+		guard result.isSuccess else { return [:] }
+		var byName: [String: ResourceUsage] = [:]
+		for line in result.output.split(separator: "\n") {
+			guard let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: String],
+				let name = object["Name"], let cpu = Double((object["CPUPerc"] ?? "").replacingOccurrences(of: "%", with: "")),
+				let memory = object["MemUsage"]?.components(separatedBy: " / ").first else { continue }
+			byName[name] = ResourceUsage(cpu: cpu, memory: memoryBytes(memory))
+		}
+		return containers.compactMapValues { byName[$0] }
+	}
+
+	static func memoryBytes(_ text: String) -> Int64 {
+		let number = text.prefix { $0.isNumber || $0 == "." }
+		let unit = text.dropFirst(number.count).trimmingCharacters(in: .whitespaces).lowercased()
+		let scale: Double = switch unit {
+		case "kib": 1024
+		case "mib": 1_048_576
+		case "gib": 1_073_741_824
+		case "tib": 1_099_511_627_776
+		case "kb": 1000
+		case "mb": 1_000_000
+		case "gb": 1_000_000_000
+		default: 1
+		}
+		return Int64((Double(number) ?? 0) * scale)
+	}
+}

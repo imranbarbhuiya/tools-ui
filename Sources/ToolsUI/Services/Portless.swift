@@ -11,7 +11,7 @@ enum Portless {
 	static let proxyStartCommand = "portless proxy start"
 
 	static var stateDirectory: URL {
-		FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".portless", isDirectory: true)
+		URL(fileURLWithPath: ProcessInfo.processInfo.environment["PORTLESS_STATE_DIR"] ?? NSHomeDirectory() + "/.portless", isDirectory: true)
 	}
 
 	/// Reduces a service name to a DNS label portless can serve. Dots survive so
@@ -35,11 +35,8 @@ enum Portless {
 		return out
 	}
 
-	/// The positional form pins the hostname to exactly `<name>.localhost`.
-	/// `portless run --name` would additionally prepend a git worktree prefix,
-	/// which would not match the URL shown in the UI.
 	static func wrap(command: String, name: String) -> String {
-		"portless \(Shell.quote(name)) \(command)"
+		"portless run --name \(Shell.quote(name)) \(command)"
 	}
 
 	// MARK: - Probe
@@ -77,6 +74,11 @@ enum Portless {
 		}
 	}
 
+	static func registeredRoutes() -> [PortlessRoute] {
+		guard let data = try? Data(contentsOf: stateDirectory.appendingPathComponent("routes.json")) else { return [] }
+		return (try? JSONDecoder().decode([PortlessRoute].self, from: data)) ?? []
+	}
+
 	static func probe() async -> Probe {
 		var probe = Probe()
 		probe.isInstalled = await Shell.run("command -v portless", timeout: 10).isSuccess
@@ -107,11 +109,8 @@ enum Portless {
 	}
 
 	private static func liveScheme() -> String? {
-		let url = stateDirectory.appendingPathComponent("proxy.log")
-		guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
-		if text.contains("HTTPS proxy listening") { return "https" }
-		if text.contains("HTTP proxy listening") { return "http" }
-		return nil
+		guard FileManager.default.fileExists(atPath: stateDirectory.appendingPathComponent("proxy.port").path) else { return nil }
+		return FileManager.default.fileExists(atPath: stateDirectory.appendingPathComponent("proxy.tls").path) ? "https" : "http"
 	}
 
 	/// Parses `portless list`, whose lines look like:
@@ -150,7 +149,7 @@ enum Portless {
 	/// name — `portless run` only works for processes portless spawns itself.
 	@discardableResult
 	static func registerAlias(name: String, port: Int) async -> Shell.Result {
-		await Shell.run("portless alias \(Shell.quote(name)) \(port) --force", timeout: 30)
+		await Shell.run("portless alias \(Shell.quote(name)) \(port)", timeout: 30)
 	}
 
 	@discardableResult

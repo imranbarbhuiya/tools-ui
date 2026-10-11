@@ -26,6 +26,16 @@ struct MenuBarView: View {
 			NSApp.activate(ignoringOtherApps: true)
 		}
 
+		Button("Portless Services…", systemImage: "network") {
+			openWindow(id: "portless-services")
+			NSApp.activate(ignoringOtherApps: true)
+		}
+
+		Button("All Logs…", systemImage: "text.alignleft") {
+			openWindow(id: "all-logs")
+			NSApp.activate(ignoringOtherApps: true)
+		}
+
 		if store.anyRunning {
 			Button("Stop All", systemImage: "stop.circle", role: .destructive) {
 				store.stopAll()

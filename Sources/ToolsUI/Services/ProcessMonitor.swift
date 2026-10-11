@@ -49,6 +49,7 @@ struct PortListener: Identifiable, Hashable, Sendable {
 	let command: String
 	let parentPID: Int
 	let parentProcess: String
+	let workingDirectory: String
 
 	var endpoint: String { "\(address):\(port)" }
 }
@@ -163,6 +164,7 @@ final class ProcessMonitor {
 		var command = ""
 		var parentPID = 0
 		var parentProcess = ""
+		var listenerDirectory = ""
 
 		for raw in lsof.output.split(separator: "\n") {
 			guard let prefix = raw.first else { continue }
@@ -172,6 +174,7 @@ final class ProcessMonitor {
 				pid = Int(value) ?? 0
 				command = commandForPID(pid)
 				(parentPID, parentProcess) = parentDetails(for: pid)
+				listenerDirectory = workingDirectory(for: pid)
 			case "c": process = value
 			case "u": ownerUID = UInt32(value) ?? UInt32.max
 			case "n":
@@ -179,7 +182,7 @@ final class ProcessMonitor {
 				let kind = classify(process: process, command: command, ownerUID: ownerUID, currentUID: uid)
 				let owner = ownerUID == uid ? user : "UID \(ownerUID)"
 				if includeSystem || kind != .system {
-					result.append(PortListener(process: process, pid: pid, user: owner, proto: "TCP", address: parsed.address, port: parsed.port, kind: kind, command: command, parentPID: parentPID, parentProcess: parentProcess))
+					result.append(PortListener(process: process, pid: pid, user: owner, proto: "TCP", address: parsed.address, port: parsed.port, kind: kind, command: command, parentPID: parentPID, parentProcess: parentProcess, workingDirectory: listenerDirectory))
 				}
 			default: break
 			}

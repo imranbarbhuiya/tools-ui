@@ -8,6 +8,7 @@ struct ServiceEditorView: View {
 
 	@Environment(\.dismiss) private var dismiss
 	@State private var draft: ManagedService
+	@State private var previewURL = ""
 
 	init(
 		title: String,
@@ -51,6 +52,13 @@ struct ServiceEditorView: View {
 				portlessSection
 				readinessSection
 				optionsSection
+			}
+			.task(id: "\(draft.usesPortless)-\(draft.resolvedPortlessName)-\(draft.projectDirectory)-\(draft.kind.rawValue)") {
+				previewURL = ""
+				try? await Task.sleep(for: .milliseconds(250))
+				guard !Task.isCancelled else { return }
+				let url = await store.resolveURL(for: draft)
+				if !Task.isCancelled { previewURL = url }
 			}
 			.formStyle(.grouped)
 			.padding(.top, 8)
@@ -308,7 +316,7 @@ struct ServiceEditorView: View {
 				}
 
 				LabeledContent("Opens") {
-					Text(draft.resolvedPortlessName.isEmpty ? "—" : draft.portlessURL(proxy: store.portless))
+					Text(previewURL.isEmpty ? "Resolved by Portless from this checkout" : previewURL)
 						.font(.caption.monospaced())
 						.foregroundStyle(.secondary)
 						.textSelection(.enabled)

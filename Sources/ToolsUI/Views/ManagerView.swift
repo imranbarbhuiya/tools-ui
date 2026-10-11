@@ -9,6 +9,8 @@ struct ManagerView: View {
 	@State private var sheet: SheetMode?
 	@State private var showLogFor: UUID?
 	@State private var search = ""
+	@AppStorage("serviceGrouping") private var grouping = "Checkouts"
+	private let overviewID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")
 
 	enum EditorMode: Identifiable {
 		case add
@@ -37,6 +39,8 @@ struct ManagerView: View {
 			|| service.command.localizedCaseInsensitiveContains(query)
 			|| service.workingDirectory.localizedCaseInsensitiveContains(query)
 			|| service.containerName.localizedCaseInsensitiveContains(query)
+			|| (store.runtime.checkout(for: service.projectDirectory)?.label.localizedCaseInsensitiveContains(query) ?? false)
+			|| store.effectiveURL(for: service).localizedCaseInsensitiveContains(query)
 	}
 
 	private var processes: [ManagedService] { store.processServices.filter(matches) }
@@ -60,9 +64,9 @@ struct ManagerView: View {
 		.task {
 			await store.refreshAll()
 			while !Task.isCancelled {
-				try? await Task.sleep(for: .seconds(4))
+				try? await Task.sleep(for: .seconds(3))
 				if Task.isCancelled { break }
-				await store.refreshDocker()
+				await store.refreshAll()
 			}
 		}
 		.sheet(item: $editor) { mode in
@@ -116,7 +120,27 @@ struct ManagerView: View {
 
 	private var sidebar: some View {
 		VStack(spacing: 0) {
+			Picker("Group by", selection: $grouping) {
+				Text("Checkouts").tag("Checkouts")
+				Text("Kind").tag("Kind")
+			}.pickerStyle(.segmented).padding(10)
 			List(selection: $selection) {
+				Label("Overview", systemImage: "square.grid.2x2").tag(overviewID)
+				if grouping == "Checkouts" {
+					ForEach(store.runtime.groups(services: store.services).filter { $0.services.contains(where: matches) }) { group in
+						Section {
+							ForEach(group.services.filter(matches)) { service in
+								ServiceRowView(service: service, status: store.status(for: service.id), container: store.container(for: service))
+									.tag(service.id).contextMenu { serviceMenu(service) }
+							}
+						} header: {
+							VStack(alignment: .leading, spacing: 2) {
+								Text(group.name)
+								Text(group.branch).font(.caption2).foregroundStyle(.tertiary).lineLimit(1).help(group.id)
+							}
+						}
+					}
+				} else {
 				if !processes.isEmpty {
 					Section {
 						ForEach(processes) { service in
@@ -145,6 +169,7 @@ struct ManagerView: View {
 					}
 				}
 
+				}
 				if !unmanaged.isEmpty {
 					Section {
 						ForEach(unmanaged) { container in
@@ -178,6 +203,14 @@ struct ManagerView: View {
 				}
 				.help("Inspect listening ports and processes")
 
+				Button {
+					openWindow(id: "portless-services")
+					NSApp.activate(ignoringOtherApps: true)
+				} label: {
+					Label("Portless Services", systemImage: "network")
+				}
+				.help("Inspect and manage Portless routes")
+
 				Menu {
 					Button("Add from Folder…", systemImage: "folder.badge.plus") { sheet = .folder }
 						.keyboardShortcut("o", modifiers: [.command])
@@ -190,6 +223,8 @@ struct ManagerView: View {
 					Label("Add", systemImage: "plus")
 				}
 				.help("Add a service")
+
+				Button("All Logs", systemImage: "text.alignleft") { openWindow(id: "all-logs") }
 
 				Button {
 					store.stopAll()
@@ -294,23 +329,7 @@ struct ManagerView: View {
 			)
 			.id(service.id)
 		} else {
-			ContentUnavailableView {
-				VStack(spacing: 14) {
-					AppLogoView(size: 84)
-					Text("Tools UI")
-						.font(.system(.title, design: .rounded).weight(.semibold))
-				}
-			} description: {
-				Text("Select a service, or add one to manage local processes and containers like a dock for your tools.")
-			} actions: {
-				HStack {
-					Button("Add from Folder") { sheet = .folder }
-						.buttonStyle(.borderedProminent)
-					Button("Add from Docker") { sheet = .catalog }
-				}
-			}
-			.frame(maxWidth: .infinity, maxHeight: .infinity)
-			.background()
+			CockpitView(store: store, onSelect: { selection = $0 }, onAdd: { sheet = .folder })
 		}
 	}
 
